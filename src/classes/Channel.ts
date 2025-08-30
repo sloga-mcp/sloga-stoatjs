@@ -37,6 +37,8 @@ export class Channel {
   readonly #collection: ChannelCollection;
   readonly id: string;
 
+  _typingTimers: Record<string, number> = {};
+
   /**
    * Construct Channel
    * @param collection Collection
