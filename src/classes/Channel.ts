@@ -296,11 +296,10 @@ export class Channel {
     )
       return false;
 
+    const unread = this.#collection.client.channelUnreads.for(this);
     return (
-      (
-        this.#collection.client.channelUnreads.get(this.id)?.lastMessageId ??
-        "0"
-      ).localeCompare(this.lastMessageId) === -1
+      (unread.lastMessageId ?? "0").localeCompare(this.lastMessageId) === -1 ||
+      unread.messageMentionIds.size > 0
     );
   }
 
@@ -720,17 +719,19 @@ export class Channel {
       this.lastMessageId ??
       ulid();
 
-    const unreads = this.#collection.client.channelUnreads;
-    const channelUnread = unreads.get(this.id);
-    if (channelUnread) {
-      unreads.updateUnderlyingObject(this.id, {
+    const channelUnread = this.#collection.client.channelUnreads.for(this);
+
+    batch(() => {
+      this.#collection.client.channelUnreads.updateUnderlyingObject(
+        this.id,
+        "lastMessageId",
         lastMessageId,
-      });
+      );
 
       if (channelUnread.messageMentionIds.size) {
         channelUnread.messageMentionIds.clear();
       }
-    }
+    });
 
     // Skip request if not needed
     if (skipRequest) return;

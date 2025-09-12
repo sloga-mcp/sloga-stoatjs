@@ -276,11 +276,22 @@ export async function handleEvent(
           delete event.user;
 
           client.messages.getOrCreate(event._id, event, true);
-          client.channels.updateUnderlyingObject(
-            event.channel,
-            "lastMessageId",
-            event._id,
-          );
+
+          if (
+            event.mentions?.includes(client.user!.id) &&
+            client.options.syncUnreads
+          ) {
+            const channel = client.channels.get(event.channel);
+            if (!channel) return;
+
+            const unread = client.channelUnreads.for(channel);
+            unread.messageMentionIds.add(event._id);
+            client.channels.updateUnderlyingObject(
+              event.channel,
+              "lastMessageId",
+              event._id,
+            );
+          }
         });
       }
       break;
