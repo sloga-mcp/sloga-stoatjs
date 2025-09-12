@@ -292,7 +292,7 @@ export class Channel {
       !this.lastMessageId ||
       this.type === "SavedMessages" ||
       this.type === "VoiceChannel" ||
-      this.#collection.client.options.channelIsMuted(this)
+      this.#collection.client.options.channelExclusiveMuted(this)
     )
       return false;
 
