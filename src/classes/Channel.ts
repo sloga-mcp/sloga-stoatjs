@@ -285,7 +285,7 @@ export class Channel {
   }
 
   /**
-   * Get whether this channel is unread.
+   * Whether this channel is unread
    */
   get unread(): boolean {
     if (
@@ -301,6 +301,13 @@ export class Channel {
       (unread.lastMessageId ?? "0").localeCompare(this.lastMessageId) === -1 ||
       unread.messageMentionIds.size > 0
     );
+  }
+
+  /**
+   * Whether this channel is muted
+   */
+  get muted(): boolean {
+    return this.#collection.client.options.channelIsMuted(this);
   }
 
   /**
