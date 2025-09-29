@@ -338,9 +338,17 @@ export class Message {
 
   /**
    * Acknowledge this message as read
+   * @param skipRateLimiter Whether to skip the internal rate limiter
+   * @param skipRequest For internal updates only
+   * @param skipNextMarking For internal usage only
+   * @requires `SavedMessages`, `DirectMessage`, `Group`, `TextChannel`
    */
-  ack(): void {
-    this.channel?.ack(this);
+  ack(
+    skipRateLimiter?: boolean,
+    skipRequest?: boolean,
+    skipNextMarking?: boolean,
+  ): void {
+    this.channel?.ack(this, skipRateLimiter, skipRequest, skipNextMarking);
   }
 
   /**
