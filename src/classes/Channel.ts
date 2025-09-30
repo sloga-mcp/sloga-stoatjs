@@ -322,6 +322,15 @@ export class Channel {
   }
 
   /**
+   * Whether this is a 'voice chats v2' channel
+   *
+   * NB. subject to change as vc(2) goes to production
+   */
+  get isVoice(): boolean {
+    return this.#collection.getUnderlyingObject(this.id).voice;
+  }
+
+  /**
    * URL to the channel icon
    */
   get iconURL(): string | undefined {

@@ -29,6 +29,8 @@ export type HydratedChannel = {
   nsfw: boolean;
 
   lastMessageId?: string;
+
+  voice: boolean;
 };
 
 export const channelHydration: Hydrate<Merge<APIChannel>, HydratedChannel> = {
@@ -60,6 +62,10 @@ export const channelHydration: Hydrate<Merge<APIChannel>, HydratedChannel> = {
     rolePermissions: (channel) => channel.role_permissions,
     nsfw: (channel) => channel.nsfw || false,
     lastMessageId: (channel) => channel.last_message_id!,
+    voice: (channel) => {
+      console.info(channel);
+      return typeof (channel as never as { voice: object }).voice === "object";
+    },
   },
   initialHydration: () => ({
     typingIds: new ReactiveSet(),
