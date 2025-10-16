@@ -1,4 +1,4 @@
-import { DataEditWebhook } from "revolt-api";
+import { DataEditWebhook } from "stoat-api";
 
 import type { ChannelWebhookCollection } from "../collections/ChannelWebhookCollection.js";
 import { hydrate } from "../hydration/index.js";
