@@ -25,7 +25,9 @@ export type HydratedUser = {
   flags: UserFlags;
 
   avatar?: File;
-  status?: UserStatus;
+  status?: UserStatus & {
+    activity?: { name: string; started_at?: string } | null;
+  };
   bot?: BotInformation;
 };
 

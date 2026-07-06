@@ -90,12 +90,23 @@ export class User {
    * User Status
    */
   get status():
-    | { text?: string | null; presence?: Presence | null }
+    | {
+        text?: string | null;
+        presence?: Presence | null;
+        activity?: { name: string; started_at?: string } | null;
+      }
     | undefined {
     // TODO: issue with API, upstream fix required #319
     if (!this.online)
       return { text: undefined, presence: "Invisible" as const };
     return this.#collection.getUnderlyingObject(this.id).status;
+  }
+
+  /**
+   * Game or application the user is currently playing, if online
+   */
+  get activity(): { name: string; started_at?: string } | undefined {
+    return (this.online && this.status?.activity) || undefined;
   }
 
   /**
@@ -286,8 +297,14 @@ export class User {
    * Send a friend request to a user
    */
   async addFriend(): Promise<User> {
+    let discriminator = this.discriminator;
+    if (!discriminator) {
+      const fresh = await this.#collection.fetch(this.id);
+      discriminator = fresh.discriminator;
+    }
+
     const user = await this.#collection.client.api.post(`/users/friend`, {
-      username: this.username + "#" + this.discriminator,
+      username: this.username + "#" + discriminator,
     });
 
     return this.#collection.getOrCreate(user._id, user);

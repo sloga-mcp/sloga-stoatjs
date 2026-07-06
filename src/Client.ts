@@ -101,6 +101,9 @@ export type Events = {
   emojiCreate: [emoji: Emoji];
   emojiDelete: [emoji: HydratedEmoji];
 
+  voiceChannelJoin: [channel: Channel, userId: string];
+  voiceChannelLeave: [channel: Channel, userId: string];
+
   userSlowmodes: [];
 };
 

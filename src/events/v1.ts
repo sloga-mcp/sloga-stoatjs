@@ -851,7 +851,8 @@ export async function handleEvent(
 
         if (event.clear) {
           for (const remove of event.clear) {
-            switch (remove) {
+            // widened: stale upstream API types lack StatusActivity
+            switch (remove as string) {
               case "Avatar":
                 changes["avatar"] = undefined;
                 break;
@@ -867,6 +868,13 @@ export async function handleEvent(
                   ...(previousUser.status ?? {}),
                   ...(changes["status"] ?? {}),
                   text: undefined,
+                };
+                break;
+              case "StatusActivity":
+                changes["status"] = {
+                  ...(previousUser.status ?? {}),
+                  ...(changes["status"] ?? {}),
+                  activity: undefined,
                 };
                 break;
             }
@@ -970,7 +978,7 @@ export async function handleEvent(
           event.state.id,
           new VoiceParticipant(client, event.state),
         );
-        // todo: event
+        client.emit("voiceChannelJoin", channel, event.state.id);
       }
       break;
     }
@@ -978,7 +986,7 @@ export async function handleEvent(
       const channel = client.channels.getOrPartial(event.id);
       if (channel) {
         channel.voiceParticipants.delete(event.user);
-        // todo: event
+        client.emit("voiceChannelLeave", channel, event.user);
       }
       break;
     }
