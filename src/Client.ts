@@ -7,6 +7,7 @@ import { API } from "stoat-api";
 import type { DataLogin, RevoltConfig, Role } from "stoat-api";
 
 import type { Channel } from "./classes/Channel.js";
+import type { E2EEAdapter } from "./classes/E2EE.js";
 import type { Emoji } from "./classes/Emoji.js";
 import type { Message } from "./classes/Message.js";
 import type { Server } from "./classes/Server.js";
@@ -206,6 +207,13 @@ export class Client extends AsyncEventEmitter<Events> {
   configuration: RevoltConfig | undefined;
   #session: Session | undefined;
   user: User | undefined;
+
+  /**
+   * Native E2EE bridge, set by the embedding app on platforms with a
+   * native crypto layer (desktop/Android). When present, every direct
+   * message send is routed through it first — see `E2EEAdapter`.
+   */
+  e2ee: E2EEAdapter | undefined;
 
   readonly ready: Accessor<boolean>;
   #setReady: Setter<boolean>;

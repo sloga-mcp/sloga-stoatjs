@@ -536,6 +536,21 @@ export class Channel {
       msg.flags |= 1;
     }
 
+    // E2EE choke point — every DM send passes through here BEFORE the
+    // plaintext path. The native layer decides the conversation's mode
+    // from local truth; a non-null result means the message went out
+    // end-to-end encrypted (the plaintext request below never happens).
+    // Encrypt-mode failures THROW inside the adapter rather than falling
+    // through — a lying or failing server can never downgrade a pinned
+    // conversation to plaintext (invariants 1–3).
+    if (this.type === "DirectMessage") {
+      const e2ee = this.#collection.client.e2ee;
+      if (e2ee) {
+        const sent = await e2ee.handleDirectMessageSend(this, msg);
+        if (sent) return sent;
+      }
+    }
+
     const message = await this.#collection.client.api.post(
       `/channels/${this.id as ""}/messages`,
       msg,
@@ -582,6 +597,16 @@ export class Channel {
       "include_users"
     >,
   ): Promise<Message[]> {
+    // E2EE conversations render from the device-local store — the server
+    // holds only transit ciphertext (see `E2EEAdapter.fetchLocalHistory`)
+    if (this.type === "DirectMessage") {
+      const e2ee = this.#collection.client.e2ee;
+      if (e2ee) {
+        const local = await e2ee.fetchLocalHistory(this, params);
+        if (local) return local;
+      }
+    }
+
     const messages = (await this.#collection.client.api.get(
       `/channels/${this.id as ""}/messages`,
       { ...params },
@@ -611,6 +636,18 @@ export class Channel {
     users: User[];
     members: ServerMember[] | undefined;
   }> {
+    // E2EE conversations render from the device-local store; DM users are
+    // already known locally
+    if (this.type === "DirectMessage") {
+      const e2ee = this.#collection.client.e2ee;
+      if (e2ee) {
+        const local = await e2ee.fetchLocalHistory(this, params);
+        if (local) {
+          return { messages: local, users: [], members: undefined };
+        }
+      }
+    }
+
     const data = (await this.#collection.client.api.get(
       `/channels/${this.id as ""}/messages`,
       { ...params, include_users: true },

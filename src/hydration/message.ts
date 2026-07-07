@@ -74,7 +74,14 @@ export const messageHydration: Hydrate<Merge<Message>, HydratedMessage> = {
     interactions: (message) => message.interactions,
     masquerade: (message) => message.masquerade!,
     pinned: (message) => message.pinned!,
-    flags: (message) => message.flags!,
+    // Strip the reserved client-only `Encrypted` bit from anything hydrated:
+    // a message's encrypted-ness is tracked out-of-band by the native E2EE
+    // bridge, never in a server-deliverable flag (which could be forged to
+    // fake a lock).
+    flags: (message) =>
+      message.flags == null
+        ? message.flags!
+        : message.flags & ~MessageFlags.Encrypted,
   },
   initialHydration: () => ({
     reactions: new ReactiveMap(),
@@ -98,4 +105,10 @@ export enum MessageFlags {
    * This cannot be true if MentionsEveryone is true
    */
   MentionsOnline = 3,
+  /**
+   * CLIENT-ASSIGNED, never sent to or received from the server: this
+   * message was end-to-end encrypted and lives only in the device-local
+   * store (injected by the native E2EE bridge). Drives the lock indicator.
+   */
+  Encrypted = 1 << 30,
 }

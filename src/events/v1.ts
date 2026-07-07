@@ -21,6 +21,7 @@ import type {
 } from "stoat-api";
 
 import type { Client } from "../Client.js";
+import type { E2EEClientMessage, E2EEServerEvent } from "../classes/E2EE.js";
 import { MessageEmbed } from "../classes/MessageEmbed.js";
 import { ServerRole } from "../classes/ServerRole.js";
 import { VoiceParticipant } from "../classes/VoiceParticipant.js";
@@ -58,7 +59,8 @@ type ClientMessage =
   | {
       type: "Pong";
       data: number;
-    };
+    }
+  | E2EEClientMessage;
 
 /**
  * Messages sent from the server
@@ -219,7 +221,8 @@ type ServerMessage =
       };
       additional_context: string;
       status: string;
-    };
+    }
+  | E2EEServerEvent;
 
 /**
  * Policy change type
@@ -1036,6 +1039,17 @@ export async function handleEvent(
         contentId: event.content.id,
         reason: event.content.report_reason,
       });
+      break;
+    }
+    case "E2EEMessage":
+    case "E2EEDeviceCreate":
+    case "E2EEDeviceDelete":
+    case "E2EEChallenge":
+    case "E2EEClaimResult": {
+      // Forwarded verbatim to the native-layer bridge; ciphertext and key
+      // material are opaque to this library. No adapter (web) = no-op —
+      // envelopes stay queued server-side for the user's real devices.
+      client.e2ee?.onEvent(event);
       break;
     }
   }
