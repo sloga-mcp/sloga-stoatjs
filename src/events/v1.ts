@@ -207,6 +207,18 @@ type ServerMessage =
   | {
       type: "UserSlowmodes";
       slowmodes: UserSlowmodes[];
+    }
+  | {
+      type: "ReportCreate";
+      _id: string;
+      author_id: string;
+      content: {
+        type: "Message" | "Server" | "User";
+        id: string;
+        report_reason: string;
+      };
+      additional_context: string;
+      status: string;
     };
 
 /**
@@ -1011,6 +1023,19 @@ export async function handleEvent(
         client.setSlowmode(slowmode.channel_id, slowmode);
       }
       client.emit("userSlowmodes");
+      break;
+    }
+    case "ReportCreate": {
+      // Broadcast on the global topic; only privileged (moderator) sessions
+      // are subscribed to it, so receiving this event means the current user
+      // is a moderator and a new report has landed.
+      client.emit("reportCreate", {
+        id: event._id,
+        authorId: event.author_id,
+        contentType: event.content.type,
+        contentId: event.content.id,
+        reason: event.content.report_reason,
+      });
       break;
     }
   }

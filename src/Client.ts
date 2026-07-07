@@ -105,6 +105,16 @@ export type Events = {
   voiceChannelLeave: [channel: Channel, userId: string];
 
   userSlowmodes: [];
+
+  reportCreate: [
+    report: {
+      id: string;
+      authorId: string;
+      contentType: "Message" | "Server" | "User";
+      contentId: string;
+      reason: string;
+    },
+  ];
 };
 
 /**
