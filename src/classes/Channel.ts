@@ -551,9 +551,16 @@ export class Channel {
       }
     }
 
+    // Prepared encrypted-attachment ids must NEVER reach the plaintext
+    // route (the adapter throws rather than returning null when they are
+    // set; stripping here is defense in depth for adapter-less builds)
+    const { e2eeAttachments: _e2eeAttachments, ...plainMsg } = msg as {
+      e2eeAttachments?: string[];
+    } & DataMessageSend;
+
     const message = await this.#collection.client.api.post(
       `/channels/${this.id as ""}/messages`,
-      msg,
+      plainMsg,
       {
         headers: {
           "Idempotency-Key": idempotencyKey,

@@ -10,6 +10,13 @@ import { File } from "../classes/File.js";
 
 import type { Hydrate } from "./index.js";
 
+/**
+ * `e2ee_enabled` is newer than the published stoat-api types. It is a UI /
+ * discovery hint ONLY (invariant 2) — actual E2EE capability always derives
+ * from a fetched, signature-verified key bundle, never from this flag.
+ */
+type APIUserExt = APIUser & { e2ee_enabled?: boolean };
+
 export type HydratedUser = {
   id: string;
   username: string;
@@ -20,6 +27,7 @@ export type HydratedUser = {
 
   online: boolean;
   privileged: boolean;
+  e2eeEnabled: boolean;
 
   badges: UserBadges;
   flags: UserFlags;
@@ -31,10 +39,11 @@ export type HydratedUser = {
   bot?: BotInformation;
 };
 
-export const userHydration: Hydrate<APIUser, HydratedUser> = {
+export const userHydration: Hydrate<APIUserExt, HydratedUser> = {
   keyMapping: {
     _id: "id",
     display_name: "displayName",
+    e2ee_enabled: "e2eeEnabled",
   },
   functions: {
     id: (user) => user._id,
@@ -46,6 +55,8 @@ export const userHydration: Hydrate<APIUser, HydratedUser> = {
 
     online: (user) => user.online!,
     privileged: (user) => user.privileged,
+    // Serialized only when true (server skips false), so absence = false
+    e2eeEnabled: (user) => user.e2ee_enabled ?? false,
 
     badges: (user) => user.badges!,
     flags: (user) => user.flags!,
@@ -56,6 +67,7 @@ export const userHydration: Hydrate<APIUser, HydratedUser> = {
   },
   initialHydration: () => ({
     relationship: "None",
+    e2eeEnabled: false,
   }),
 };
 

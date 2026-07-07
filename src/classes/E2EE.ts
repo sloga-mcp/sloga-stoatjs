@@ -37,6 +37,25 @@ export type E2EEClientMessage =
   | { type: "E2EEAck"; ids: string[] };
 
 /**
+ * Message-send data extended with prepared encrypted attachments: local
+ * ids returned by `prepareDraftAttachments`, whose refs (blob id, per-file
+ * key, digest, name, mime, size) travel INSIDE the envelope ciphertext.
+ * Never serialized to the plaintext message route.
+ */
+export type E2EEDataMessageSend = DataMessageSend & {
+  e2eeAttachments?: string[];
+};
+
+/**
+ * A file staged on a draft, as handed to `prepareDraftAttachments`.
+ */
+export type E2EEDraftFile = {
+  file: File;
+  /** Upload progress callback (0..1) */
+  onProgress?: (fraction: number) => void;
+};
+
+/**
  * Bridge between the client and a native E2EE layer (the Tauri desktop
  * shell, or Android's uniffi binding). Key material NEVER crosses this
  * interface — the adapter talks to the native layer over IPC and only
@@ -55,6 +74,15 @@ export interface E2EEAdapter {
    * is `plaintext` (a never-encrypted conversation with a never-pinned
    * peer) — the caller then proceeds with the ordinary message path.
    *
+   * For a plaintext-mode conversation whose peer ADVERTISES E2EE opt-in
+   * (`User.e2eeEnabled`), the adapter should first attempt a sender-initiated
+   * upgrade: fetch + verify the peer's key bundle and deliver this message
+   * encrypted (establishing the sticky encrypted state). The advertisement is
+   * an upgrade trigger only — if the peer turns out to have no verified keys,
+   * the conversation remains plaintext exactly as if never advertised (no
+   * pins are created), and `null` is returned. Once ANY state was pinned by
+   * the attempt, failures are hard errors like the encrypt-mode path.
+   *
    * For an encrypt-mode conversation this either delivers the message
    * end-to-end encrypted and returns the local echo, or THROWS. It never
    * returns `null` on failure: a bundle-fetch error, key revocation or
@@ -63,7 +91,7 @@ export interface E2EEAdapter {
    */
   handleDirectMessageSend(
     channel: Channel,
-    data: DataMessageSend,
+    data: E2EEDataMessageSend,
   ): Promise<Message | null>;
 
   /**
@@ -87,14 +115,29 @@ export interface E2EEAdapter {
   isEncryptedMessage(id: string): boolean;
 
   /**
-   * Fail-closed gate at the shared upload/send chokepoint. THROWS (never
-   * returns) when this DM send must not proceed down the plaintext path —
-   * in particular so attachments are blocked BEFORE any plaintext upload to
-   * Autumn, from EVERY caller (composer, retry, future callers). No-op for
-   * plaintext-mode conversations and non-DM channels. Callers must invoke
-   * this before uploading attachments or posting the plaintext message.
+   * Fail-closed gate at the shared upload/send chokepoint (slice 3.5) —
+   * EVERY caller that sends a draft (composer, retry, future callers) MUST
+   * route its staged files through here BEFORE any plaintext byte reaches
+   * the ordinary Autumn upload path.
+   *
+   * Decides from native local truth:
+   * - plaintext-mode conversation (or non-DM / no adapter reachable
+   *   verdict of plaintext): returns `null` — the caller proceeds with the
+   *   ordinary plaintext upload path.
+   * - encrypt mode: encrypts every file natively (per-file random key),
+   *   uploads the CIPHERTEXT to the opaque-blob route, and returns the
+   *   prepared local ids for `e2eeAttachments`. Plaintext never leaves the
+   *   device. Throws on any failure — never a plaintext fallback.
+   * - blocked (peer identity change pending) or an unverifiable native
+   *   state: THROWS, even for text-only drafts.
+   *
+   * Called with no files it still performs the blocked/verifiability check
+   * (and returns `null`), preserving the early fail-closed gate.
    */
-  guardSend(channel: Channel, hasAttachments: boolean): Promise<void>;
+  prepareDraftAttachments(
+    channel: Channel,
+    items: E2EEDraftFile[],
+  ): Promise<string[] | null>;
 
   /**
    * An E2EE event arrived on the events connection (envelope push,

@@ -87,6 +87,18 @@ export class User {
   }
 
   /**
+   * Whether this user advertises E2EE opt-in.
+   *
+   * Discovery / UI hint ONLY (invariant 2): it may trigger an ATTEMPT to
+   * establish encryption (sender-initiated upgrade), but actual capability
+   * always derives from a fetched, signature-verified key bundle — and a
+   * pinned conversation never downgrades because this flag flips.
+   */
+  get e2eeEnabled(): boolean {
+    return this.#collection.getUnderlyingObject(this.id).e2eeEnabled ?? false;
+  }
+
+  /**
    * User Status
    */
   get status():
