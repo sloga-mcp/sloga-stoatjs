@@ -549,6 +549,16 @@ export class Channel {
         const sent = await e2ee.handleDirectMessageSend(this, msg);
         if (sent) return sent;
       }
+    } else if (this.type === "Group") {
+      // Group DM E2EE (slice 5): same choke-point discipline as DMs — an
+      // encrypted group's send THROWS on any failure, never falls through
+      // to the plaintext route (a null result means the group is genuinely
+      // plaintext).
+      const e2ee = this.#collection.client.e2ee;
+      if (e2ee) {
+        const sent = await e2ee.handleGroupMessageSend(this, msg);
+        if (sent) return sent;
+      }
     }
 
     // Prepared encrypted-attachment ids must NEVER reach the plaintext
@@ -605,8 +615,9 @@ export class Channel {
     >,
   ): Promise<Message[]> {
     // E2EE conversations render from the device-local store — the server
-    // holds only transit ciphertext (see `E2EEAdapter.fetchLocalHistory`)
-    if (this.type === "DirectMessage") {
+    // holds only transit ciphertext (see `E2EEAdapter.fetchLocalHistory`).
+    // Applies to both 1:1 DMs and encrypted groups (slice 5).
+    if (this.type === "DirectMessage" || this.type === "Group") {
       const e2ee = this.#collection.client.e2ee;
       if (e2ee) {
         const local = await e2ee.fetchLocalHistory(this, params);
@@ -643,9 +654,9 @@ export class Channel {
     users: User[];
     members: ServerMember[] | undefined;
   }> {
-    // E2EE conversations render from the device-local store; DM users are
-    // already known locally
-    if (this.type === "DirectMessage") {
+    // E2EE conversations render from the device-local store; DM and group
+    // users are already known locally (slice 5)
+    if (this.type === "DirectMessage" || this.type === "Group") {
       const e2ee = this.#collection.client.e2ee;
       if (e2ee) {
         const local = await e2ee.fetchLocalHistory(this, params);

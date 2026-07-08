@@ -140,6 +140,20 @@ export interface E2EEAdapter {
   ): Promise<string[] | null>;
 
   /**
+   * Handle a GROUP-channel send (slice 5). The single choke point for group
+   * plaintext-downgrade, mirroring `handleDirectMessageSend`: returns `null`
+   * ONLY when the native group send-mode verdict is `plaintext` (the group
+   * was never encrypted). For an encrypted group this delivers the message
+   * end-to-end to the pinned roster or THROWS — never a silent plaintext
+   * fallback. There is no group sender-initiated upgrade: a group becomes
+   * encrypted only via the explicit `enableGroupEncryption` action.
+   */
+  handleGroupMessageSend(
+    channel: Channel,
+    data: E2EEDataMessageSend,
+  ): Promise<Message | null>;
+
+  /**
    * An E2EE event arrived on the events connection (envelope push,
    * device-list change, claim challenge/result).
    */
