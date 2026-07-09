@@ -28,11 +28,15 @@ export class SessionCollection extends ClassCollection<
   /**
    * Delete all sessions, optionally including self
    * @param revokeSelf Whether to remove current session too
+   * @param mfaToken Validated MFA ticket token. The server requires re-auth for
+   *   this destructive action (`X-MFA-Ticket`); omitting it 401s.
    */
-  async deleteAll(revokeSelf = false): Promise<void> {
-    await this.client.api.delete("/auth/session/all", {
-      revoke_self: revokeSelf,
-    });
+  async deleteAll(revokeSelf = false, mfaToken?: string): Promise<void> {
+    await this.client.api.delete(
+      "/auth/session/all",
+      { revoke_self: revokeSelf },
+      mfaToken ? { headers: { "X-MFA-Ticket": mfaToken } } : undefined,
+    );
 
     for (const entry of this.toList()) {
       if (!revokeSelf && entry.current) continue;
