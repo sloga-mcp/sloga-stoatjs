@@ -21,6 +21,7 @@ import type {
 } from "stoat-api";
 
 import type { Client } from "../Client.js";
+import type { EventData, EventRsvpData } from "../classes/CalendarEvent.js";
 import type { E2EEClientMessage, E2EEServerEvent } from "../classes/E2EE.js";
 import { MessageEmbed } from "../classes/MessageEmbed.js";
 import { ServerRole } from "../classes/ServerRole.js";
@@ -222,6 +223,10 @@ type ServerMessage =
       additional_context: string;
       status: string;
     }
+  | { type: "CalendarEventCreate"; event: EventData }
+  | { type: "CalendarEventUpdate"; event: EventData }
+  | { type: "CalendarEventInvite"; event: EventData }
+  | { type: "CalendarEventRsvp"; rsvp: EventRsvpData }
   | E2EEServerEvent;
 
 /**
@@ -1039,6 +1044,37 @@ export async function handleEvent(
         contentId: event.content.id,
         reason: event.content.report_reason,
       });
+      break;
+    }
+    case "CalendarEventCreate": {
+      const instance = client.calendarEvents.upsert(event.event);
+      client.emit("calendarEventCreate", instance);
+      break;
+    }
+    case "CalendarEventUpdate": {
+      // Full-object merge over a complete hydrated event; also carries
+      // soft-cancel (event.cancelled === true).
+      const instance = client.calendarEvents.upsert(event.event);
+      client.emit("calendarEventUpdate", instance);
+      break;
+    }
+    case "CalendarEventInvite": {
+      const instance = client.calendarEvents.upsert(event.event);
+      client.emit("calendarEventInvite", instance);
+      break;
+    }
+    case "CalendarEventRsvp": {
+      const instance = client.calendarEvents.get(event.rsvp.event);
+      if (instance) {
+        // Authoritative only for the caller's OWN row; other users' counts are
+        // refreshed by the open detail via fetchWithContext (no delta drift).
+        if (event.rsvp.user === client.user?.id) {
+          client.calendarEvents.updateUnderlyingObject(event.rsvp.event, {
+            myRsvp: event.rsvp.status,
+          } as never);
+        }
+        client.emit("calendarEventRsvp", instance, event.rsvp);
+      }
       break;
     }
     case "E2EEMessage":

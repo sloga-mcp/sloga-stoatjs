@@ -6,6 +6,7 @@ import { AsyncEventEmitter } from "@vladfrangu/async_event_emitter";
 import { API } from "stoat-api";
 import type { DataLogin, RevoltConfig, Role } from "stoat-api";
 
+import type { CalendarEvent, EventRsvpData } from "./classes/CalendarEvent.js";
 import type { Channel } from "./classes/Channel.js";
 import type { E2EEAdapter } from "./classes/E2EE.js";
 import type { Emoji } from "./classes/Emoji.js";
@@ -19,6 +20,7 @@ import { ChannelCollection } from "./collections/ChannelCollection.js";
 import { ChannelUnreadCollection } from "./collections/ChannelUnreadCollection.js";
 import { ChannelWebhookCollection } from "./collections/ChannelWebhookCollection.js";
 import { EmojiCollection } from "./collections/EmojiCollection.js";
+import { EventCollection } from "./collections/EventCollection.js";
 import { MessageCollection } from "./collections/MessageCollection.js";
 import { ServerCollection } from "./collections/ServerCollection.js";
 import { ServerMemberCollection } from "./collections/ServerMemberCollection.js";
@@ -101,6 +103,11 @@ export type Events = {
 
   emojiCreate: [emoji: Emoji];
   emojiDelete: [emoji: HydratedEmoji];
+
+  calendarEventCreate: [event: CalendarEvent];
+  calendarEventUpdate: [event: CalendarEvent];
+  calendarEventInvite: [event: CalendarEvent];
+  calendarEventRsvp: [event: CalendarEvent, rsvp: EventRsvpData];
 
   voiceChannelJoin: [channel: Channel, userId: string];
   voiceChannelLeave: [channel: Channel, userId: string];
@@ -189,6 +196,7 @@ export type ClientOptions = Partial<EventClientOptions> & {
 export class Client extends AsyncEventEmitter<Events> {
   readonly account;
   readonly bots;
+  readonly calendarEvents;
   readonly channels;
   readonly channelUnreads;
   readonly channelWebhooks;
@@ -290,6 +298,7 @@ export class Client extends AsyncEventEmitter<Events> {
 
     this.account = new AccountCollection(this);
     this.bots = new BotCollection(this);
+    this.calendarEvents = new EventCollection(this);
     this.channels = new ChannelCollection(this);
     this.channelUnreads = new ChannelUnreadCollection(this);
     this.channelWebhooks = new ChannelWebhookCollection(this);

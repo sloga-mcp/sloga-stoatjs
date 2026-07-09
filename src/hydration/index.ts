@@ -3,6 +3,7 @@ import { channelHydration } from "./channel.js";
 import { channelUnreadHydration } from "./channelUnread.js";
 import { channelWebhookHydration } from "./channelWebhook.js";
 import { emojiHydration } from "./emoji.js";
+import { eventHydration } from "./event.js";
 import { messageHydration } from "./message.js";
 import { serverHydration } from "./server.js";
 import { serverMemberHydration } from "./serverMember.js";
@@ -72,6 +73,7 @@ const hydrators = {
   channelUnread: channelUnreadHydration,
   channelWebhook: channelWebhookHydration,
   emoji: emojiHydration,
+  event: eventHydration,
   message: messageHydration,
   server: serverHydration,
   serverMember: serverMemberHydration,

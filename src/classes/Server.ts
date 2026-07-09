@@ -754,13 +754,23 @@ export class Server {
   async queryMembersExperimental(
     query: string,
   ): Promise<{ members: ServerMember[]; users: User[] }> {
-    const data = (await this.#collection.client.api.get(
-      `/servers/${
-        this.id as ""
-      }/members_experimental_query?experimental_api=true&query=${encodeURIComponent(
-        query,
-      )}` as never,
-    )) as AllMemberResponse;
+    // Raw fetch: the typed client appends its own `?` to a path that already
+    // embeds a query string, corrupting the last param (`query=foo?` reaches
+    // the server with a literal trailing `?` and matches nothing).
+    const api = this.#collection.client.api as unknown as {
+      baseURL: string;
+      auth: Record<string, string>;
+    };
+    const params = new URLSearchParams({
+      experimental_api: "true",
+      query,
+    });
+    const response = await fetch(
+      `${api.baseURL}/servers/${this.id}/members_experimental_query?${params}`,
+      { headers: api.auth },
+    );
+    if (!response.ok) throw await response.text();
+    const data = (await response.json()) as AllMemberResponse;
 
     return batch(() => ({
       members: data.members.map((member) =>

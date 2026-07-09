@@ -1,5 +1,6 @@
 export * from "./BannedUser.js";
 export * from "./Bot.js";
+export * from "./CalendarEvent.js";
 export * from "./Channel.js";
 export * from "./ChannelUnread.js";
 export * from "./ChannelWebhook.js";
