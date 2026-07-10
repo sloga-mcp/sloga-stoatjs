@@ -4,6 +4,7 @@ import {
   type EventData,
   type EventWithContext,
   type EventWithOccurrences,
+  type ImportResultData,
 } from "../classes/CalendarEvent.js";
 import type { HydratedEvent } from "../hydration/event.js";
 import { hydrate } from "../hydration/index.js";
@@ -121,6 +122,20 @@ export class EventCollection extends ClassCollection<
       event: this.upsert(row.event),
       occurrences: row.occurrences,
     }));
+  }
+
+  /**
+   * Import legacy `[ACUTEST_EVENT]:`-tagged messages from a channel into real
+   * events (manager-triggered, slice F). Dedup by source message id makes
+   * re-running safe.
+   */
+  async importLegacy(
+    serverId: string,
+    channelId: string,
+  ): Promise<ImportResultData> {
+    return (await this.apiReq("POST", `/events/server/${serverId}/import`, {
+      body: { channel: channelId },
+    })) as ImportResultData;
   }
 
   /**

@@ -124,6 +124,24 @@ export interface DataEditEvent {
   remove?: FieldsEvent[];
 }
 
+/** `POST /events/event/<id>/invites` result (slice F: counts, was 204). */
+export interface InviteResultData {
+  /** Genuinely-new invitees (RSVP rows created). */
+  invited: number;
+  /** Skipped: non-members, non-viewers, or users who already had a row. */
+  skipped: number;
+}
+
+/** `POST /events/server/<id>/import` result (legacy tag import, design §11). */
+export interface ImportResultData {
+  imported: number;
+  skipped_duplicates: number;
+  skipped_invalid: number;
+  scanned: number;
+  /** True when the scan stopped at the message cap before exhausting history. */
+  truncated: boolean;
+}
+
 // ----- Class ------------------------------------------------------------------
 
 /**
@@ -280,13 +298,19 @@ export class CalendarEvent {
   }
 
   /**
-   * Invite server members. Insert-if-absent server-side; already-answered or
-   * non-viewing members are skipped.
+   * Invite server members by user id and/or by role — each role's CURRENT
+   * holders are expanded server-side (slice F, 0.1-A). Insert-if-absent:
+   * already-answered or non-viewing members are skipped and counted.
    */
-  async invite(users: string[]): Promise<void> {
-    await this.#collection.apiReq("POST", `/events/event/${this.id}/invites`, {
-      body: { users },
-    });
+  async invite(users: string[], roles?: string[]): Promise<InviteResultData> {
+    const body: { users?: string[]; roles?: string[] } = {};
+    if (users.length) body.users = users;
+    if (roles?.length) body.roles = roles;
+    return (await this.#collection.apiReq(
+      "POST",
+      `/events/event/${this.id}/invites`,
+      { body },
+    )) as InviteResultData;
   }
 
   /**
