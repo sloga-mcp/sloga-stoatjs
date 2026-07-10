@@ -153,7 +153,7 @@ export class EventClient<
 
     this.#connectTimeoutReference = setTimeout(
       () => this.disconnect(),
-      this.options.pongTimeout * 1e3,
+      this.options.connectTimeout * 1e3,
     ) as never;
 
     const url = new URL(uri);
@@ -206,9 +206,13 @@ export class EventClient<
     this.#socket.onclose = () => {
       if (closed) return;
       closed = true;
+      // Clear timers directly: disconnect() early-returns once #socket is
+      // undefined, which used to leak the heartbeat interval on remote close.
+      clearInterval(this.#heartbeatIntervalReference);
+      clearTimeout(this.#connectTimeoutReference);
+      clearTimeout(this.#pongTimeoutReference);
       this.#socket = undefined;
       this.setState(ConnectionState.Disconnected);
-      this.disconnect();
     };
   }
 
@@ -231,8 +235,11 @@ export class EventClient<
    */
   send(event: EventProtocol<T>["client"]): void {
     if (this.options.debug) console.debug("[C->S]", event);
-    if (!this.#socket) throw "Socket closed, trying to send.";
-    this.#socket.send(JSONStringify(event));
+    const socket = this.#socket;
+    // Drop the message unless the socket is fully open; a socket object can
+    // also be CONNECTING, CLOSING or CLOSED, where send() would throw.
+    if (!socket || socket.readyState !== WebSocket.OPEN) return;
+    socket.send(JSONStringify(event));
   }
 
   /**
