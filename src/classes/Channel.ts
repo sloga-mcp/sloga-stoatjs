@@ -865,22 +865,31 @@ export class Channel {
    * @param node Target node
    * @param forceDisconnect Whether to disconnect existing call
    * @param recipients Ring targets
+   * @param deviceId E2EE device id — when present the server mints a
+   *   device-qualified LiveKit identity `{user_id}:{device_id}` so per-device
+   *   MLS frame keys map injectively (media E2EE, slice 6.1/6.4). Omit for
+   *   web / non-E2EE calls (identity stays the bare user id).
    * @returns LiveKit URL and Token
    */
   async joinCall(
     node?: string,
     forceDisconnect = true,
     recipients?: (User | string)[],
+    deviceId?: string,
   ) {
+    const body = {
+      node,
+      recipients: recipients?.map((entry) =>
+        typeof entry === "string" ? entry : entry.id,
+      ),
+      force_disconnect: forceDisconnect,
+    };
     return await this.#collection.client.api.post(
       `/channels/${this.id as ""}/join_call`,
-      {
-        node,
-        recipients: recipients?.map((entry) =>
-          typeof entry === "string" ? entry : entry.id,
-        ),
-        force_disconnect: forceDisconnect,
-      },
+      // `device_id` is carried at runtime by the generic body mapper for this
+      // known route; stoat-api 0.13.5's `DataJoinCall` type predates the field,
+      // so cast back to the pre-field body type to satisfy the compiler.
+      (deviceId ? { ...body, device_id: deviceId } : body) as typeof body,
     );
   }
 
