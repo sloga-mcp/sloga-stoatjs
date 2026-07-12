@@ -5,6 +5,7 @@ export * from "./classes/index.js";
 export * from "./collections/index.js";
 export { ConnectionState, EventClient } from "./events/EventClient.js";
 export { BotFlags } from "./hydration/bot.js";
+export type { HydratedChannel } from "./hydration/channel.js";
 export { MessageFlags } from "./hydration/message.js";
 export { ServerFlags } from "./hydration/server.js";
 export { UserBadges, UserFlags } from "./hydration/user.js";

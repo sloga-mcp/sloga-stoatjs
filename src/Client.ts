@@ -82,6 +82,10 @@ export type Events = {
   channelStopTyping: [channel: Channel, user?: User];
   channelAcknowledged: [channel: Channel, messageId: string];
 
+  threadCreate: [thread: Channel];
+  threadMemberJoin: [thread: Channel, userId: string];
+  threadMemberLeave: [thread: Channel, userId: string];
+
   serverCreate: [server: Server];
   serverUpdate: [server: Server, previousServer: HydratedServer];
   serverDelete: [server: HydratedServer];

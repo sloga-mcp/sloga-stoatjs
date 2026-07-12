@@ -30,9 +30,15 @@ export type HydratedMessage = {
   masquerade?: Masquerade;
   pinned?: boolean;
   flags?: MessageFlags;
+  /** Thread anchored to this message (server-stamped, never client-sent). */
+  threadId?: string;
 };
 
-export const messageHydration: Hydrate<Merge<Message>, HydratedMessage> = {
+export const messageHydration: Hydrate<
+  // `thread_id` is additive and server-set; stoat-api 0.13.5 predates it.
+  Merge<Message> & { thread_id?: string },
+  HydratedMessage
+> = {
   keyMapping: {
     _id: "id",
     channel: "channelId",
@@ -41,6 +47,7 @@ export const messageHydration: Hydrate<Merge<Message>, HydratedMessage> = {
     edited: "editedAt",
     mentions: "mentionIds",
     replies: "replyIds",
+    thread_id: "threadId",
   },
   functions: {
     id: (message) => message._id,
@@ -82,6 +89,7 @@ export const messageHydration: Hydrate<Merge<Message>, HydratedMessage> = {
       message.flags == null
         ? message.flags!
         : message.flags & ~MessageFlags.Encrypted,
+    threadId: (message) => message.thread_id,
   },
   initialHydration: () => ({
     reactions: new ReactiveMap(),

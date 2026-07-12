@@ -1,7 +1,7 @@
 import { batch } from "solid-js";
 
 import { ReactiveMap } from "@solid-primitives/map";
-import type { ReactiveSet } from "@solid-primitives/set";
+import { ReactiveSet } from "@solid-primitives/set";
 import type {
   Channel as APIChannel,
   Member as APIMember,
@@ -29,6 +29,7 @@ import type { File } from "./File.js";
 import type { Message } from "./Message.js";
 import type { Server } from "./Server.js";
 import type { ServerMember } from "./ServerMember.js";
+import type { DataCreateThread, ThreadChannelData } from "./Thread.js";
 import type { User } from "./User.js";
 import { VoiceParticipant } from "./VoiceParticipant.js";
 
@@ -42,6 +43,12 @@ export class Channel {
   _typingTimers: Record<string, number> = {};
 
   voiceParticipants = new ReactiveMap<string, VoiceParticipant>();
+
+  /**
+   * User ids of joined thread members (threads only) — kept live by
+   * `ThreadMemberJoin` / `ThreadMemberLeave` events and `fetchThreadMembers`.
+   */
+  threadMembers = new ReactiveSet<string>();
 
   /**
    * Construct Channel
@@ -78,12 +85,15 @@ export class Channel {
   /**
    * Channel type
    */
-  get type(): APIChannel["channel_type"] {
+  get type(): APIChannel["channel_type"] | "Thread" {
     return this.#collection.getUnderlyingObject(this.id).channelType;
   }
 
   /**
    * Absolute pathname to this channel in the client
+   *
+   * Threads carry their own `server` field, so they resolve to
+   * `/server/:server/channel/:threadId` like any server channel.
    */
   get path(): string {
     if (this.serverId) {
@@ -228,6 +238,81 @@ export class Channel {
     return this.#collection.client.servers.get(
       this.#collection.getUnderlyingObject(this.id).serverId!,
     );
+  }
+
+  /**
+   * Whether this channel is a thread
+   */
+  get isThread(): boolean {
+    return this.type === "Thread";
+  }
+
+  /**
+   * Parent channel ID (threads only)
+   */
+  get parentChannelId(): string | undefined {
+    return this.#collection.getUnderlyingObject(this.id).parentChannelId;
+  }
+
+  /**
+   * Parent channel this thread hangs off (threads only) — the source of
+   * truth for permissions
+   */
+  get parent(): Channel | undefined {
+    const id = this.parentChannelId;
+    return id ? this.#collection.get(id) : undefined;
+  }
+
+  /**
+   * ID of the message in the parent channel this thread was created from
+   * (threads only)
+   */
+  get originMessageId(): string | undefined {
+    return this.#collection.getUnderlyingObject(this.id).originMessageId;
+  }
+
+  /**
+   * User ID of the thread creator (threads only, server-stamped)
+   */
+  get creatorId(): string | undefined {
+    return this.#collection.getUnderlyingObject(this.id).creatorId;
+  }
+
+  /**
+   * User who created this thread (threads only)
+   */
+  get creator(): User | undefined {
+    const id = this.creatorId;
+    return id ? this.#collection.client.users.get(id) : undefined;
+  }
+
+  /**
+   * Whether this thread is archived (threads only, server-set)
+   */
+  get archived(): boolean {
+    return this.#collection.getUnderlyingObject(this.id).archived || false;
+  }
+
+  /**
+   * Time when this thread was archived (threads only)
+   */
+  get archivedTimestamp(): Date | undefined {
+    return this.#collection.getUnderlyingObject(this.id).archivedTimestamp;
+  }
+
+  /**
+   * Minutes of inactivity after which this thread auto-archives
+   * (threads only; one of 60 / 1440 / 4320 / 10080)
+   */
+  get autoArchiveMinutes(): number | undefined {
+    return this.#collection.getUnderlyingObject(this.id).autoArchiveMinutes;
+  }
+
+  /**
+   * Whether this thread is locked (threads only, server-set)
+   */
+  get locked(): boolean {
+    return this.#collection.getUnderlyingObject(this.id).locked || false;
   }
 
   /**
@@ -762,6 +847,131 @@ export class Channel {
     return await this.#collection.client.api.post(
       `/channels/${this.id as ""}/invites`,
     );
+  }
+
+  /**
+   * Create a thread under this channel
+   * @param data Thread creation data
+   * @param fromMessageId Anchor the thread to an existing message in this
+   *   channel (`POST .../messages/{msg}/threads`); omit for a standalone thread
+   * @requires `TextChannel` — the server rejects DM / Group / SavedMessages /
+   *   Thread parents (E2EE conversations can never host a thread, fail-closed)
+   * @returns The newly-created thread
+   */
+  async createThread(
+    data: DataCreateThread,
+    fromMessageId?: string,
+  ): Promise<Channel> {
+    const thread = (await this.#collection.apiReq(
+      "POST",
+      fromMessageId
+        ? `/channels/${this.id}/messages/${fromMessageId}/threads`
+        : `/channels/${this.id}/threads`,
+      { body: data },
+    )) as ThreadChannelData;
+
+    const channel = this.#collection.getOrCreate(thread._id, thread, true);
+    // The server auto-joins the creator; reflect that immediately.
+    const self = this.#collection.client.user;
+    if (self) channel.threadMembers.add(self.id);
+    // The WS ChannelCreate for our own creation is deduplicated (the channel
+    // is already cached), so emit threadCreate locally too — otherwise the
+    // creating device never sees it.
+    this.#collection.client.emit("threadCreate", channel);
+    return channel;
+  }
+
+  /**
+   * Fetch threads under this channel
+   * @param params archived: list archived instead of active threads;
+   *   before: ULID pagination cursor; limit: 1..=100
+   * @requires `TextChannel`
+   * @returns Threads sorted by last activity, descending
+   */
+  async fetchThreads(params?: {
+    archived?: boolean;
+    before?: string;
+    limit?: number;
+  }): Promise<Channel[]> {
+    const threads = (await this.#collection.apiReq(
+      "GET",
+      `/channels/${this.id}/threads`,
+      { query: params },
+    )) as ThreadChannelData[];
+
+    return batch(() =>
+      threads.map((thread) => this.#collection.getOrCreate(thread._id, thread)),
+    );
+  }
+
+  /**
+   * Join this thread as the current user
+   * @requires `Thread`
+   */
+  async joinThread(): Promise<void> {
+    await this.#collection.apiReq(
+      "PUT",
+      `/channels/${this.id}/thread_members/@me`,
+    );
+
+    const self = this.#collection.client.user;
+    if (self) this.threadMembers.add(self.id);
+  }
+
+  /**
+   * Leave this thread, or remove another member from it
+   * @param userId Member to remove (defaults to the current user; removing
+   *   others requires `ManageChannel` on the parent)
+   * @requires `Thread`
+   */
+  async leaveThread(userId?: string): Promise<void> {
+    await this.#collection.apiReq(
+      "DELETE",
+      `/channels/${this.id}/thread_members/${userId ?? "@me"}`,
+    );
+
+    const id = userId ?? this.#collection.client.user?.id;
+    if (id) this.threadMembers.delete(id);
+  }
+
+  /**
+   * Fetch this thread's members, refreshing {@link threadMembers}
+   * @requires `Thread`
+   * @returns User ids of joined members
+   */
+  async fetchThreadMembers(): Promise<string[]> {
+    // The server returns a plain array of user ids.
+    const members = (await this.#collection.apiReq(
+      "GET",
+      `/channels/${this.id}/thread_members`,
+    )) as string[];
+
+    batch(() => {
+      this.threadMembers.clear();
+      for (const userId of members) {
+        this.threadMembers.add(userId);
+      }
+    });
+
+    return members;
+  }
+
+  /**
+   * Archive this thread (requires `ManageChannel` on the parent, or being
+   * the thread's creator)
+   * @requires `Thread`
+   */
+  archive(): Promise<void> {
+    return this.edit({ archived: true });
+  }
+
+  /**
+   * Unarchive this thread (requires `ManageChannel` on the parent, or being
+   * the thread's creator)
+   * @requires `Thread`
+   */
+  unarchive(): Promise<void> {
+    return this.edit({ archived: false });
   }
 
   #ackTimeout?: number;

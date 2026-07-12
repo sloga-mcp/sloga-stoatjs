@@ -4,6 +4,7 @@ import type { Channel as APIChannel } from "stoat-api";
 
 import type { Client } from "../Client.js";
 import { File } from "../classes/File.js";
+import type { ThreadChannelData } from "../classes/Thread.js";
 import { VoiceParticipant } from "../classes/VoiceParticipant.js";
 import type { Merge } from "../lib/merge.js";
 
@@ -11,7 +12,7 @@ import type { Hydrate } from "./index.js";
 
 export type HydratedChannel = {
   id: string;
-  channelType: APIChannel["channel_type"];
+  channelType: APIChannel["channel_type"] | "Thread";
 
   name: string;
   description?: string;
@@ -34,9 +35,21 @@ export type HydratedChannel = {
   lastMessageId?: string;
 
   voice?: { maxUsers?: number };
+
+  // Thread ("Thread" channel_type) fields — additive, absent on other types.
+  parentChannelId?: string;
+  originMessageId?: string;
+  creatorId?: string;
+  archived: boolean;
+  archivedTimestamp?: Date;
+  autoArchiveMinutes?: number;
+  locked: boolean;
 };
 
-export const channelHydration: Hydrate<Merge<APIChannel>, HydratedChannel> = {
+export const channelHydration: Hydrate<
+  Merge<APIChannel | ThreadChannelData>,
+  HydratedChannel
+> = {
   keyMapping: {
     _id: "id",
     channel_type: "channelType",
@@ -48,6 +61,11 @@ export const channelHydration: Hydrate<Merge<APIChannel>, HydratedChannel> = {
     role_permissions: "rolePermissions",
     last_message_id: "lastMessageId",
     slowmode: "slowmode",
+    parent_channel: "parentChannelId",
+    origin_message_id: "originMessageId",
+    creator: "creatorId",
+    archived_timestamp: "archivedTimestamp",
+    auto_archive_minutes: "autoArchiveMinutes",
   },
   functions: {
     id: (channel) => channel._id,
@@ -87,9 +105,21 @@ export const channelHydration: Hydrate<Merge<APIChannel>, HydratedChannel> = {
             maxUsers: channel.voice?.max_users || undefined,
           }
         : undefined,
+    parentChannelId: (channel) => channel.parent_channel,
+    originMessageId: (channel) => channel.origin_message_id,
+    creatorId: (channel) => channel.creator,
+    archived: (channel) => channel.archived || false,
+    archivedTimestamp: (channel) =>
+      channel.archived_timestamp
+        ? new Date(channel.archived_timestamp)
+        : undefined,
+    autoArchiveMinutes: (channel) => channel.auto_archive_minutes,
+    locked: (channel) => channel.locked || false,
   },
   initialHydration: () => ({
     typingIds: new ReactiveSet(),
     recipientIds: new ReactiveSet(),
+    archived: false,
+    locked: false,
   }),
 };

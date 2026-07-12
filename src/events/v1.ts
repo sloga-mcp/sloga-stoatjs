@@ -25,6 +25,7 @@ import type { EventData, EventRsvpData } from "../classes/CalendarEvent.js";
 import type { E2EEClientMessage, E2EEServerEvent } from "../classes/E2EE.js";
 import { MessageEmbed } from "../classes/MessageEmbed.js";
 import { ServerRole } from "../classes/ServerRole.js";
+import type { ThreadChannelData } from "../classes/Thread.js";
 import { VoiceParticipant } from "../classes/VoiceParticipant.js";
 import { hydrate } from "../hydration/index.js";
 
@@ -108,7 +109,7 @@ type ServerMessage =
       emoji_id: string;
     }
   | { type: "BulkMessageDelete"; channel: string; ids: string[] }
-  | ({ type: "ChannelCreate" } & Channel)
+  | ({ type: "ChannelCreate" } & (Channel | ThreadChannelData))
   | {
       type: "ChannelUpdate";
       id: string;
@@ -121,6 +122,8 @@ type ServerMessage =
   | { type: "ChannelStartTyping"; id: string; user: string }
   | { type: "ChannelStopTyping"; id: string; user: string }
   | { type: "ChannelAck"; id: string; user: string; message_id: string }
+  | { type: "ThreadMemberJoin"; id: string; user: string }
+  | { type: "ThreadMemberLeave"; id: string; user: string }
   | {
       type: "ServerCreate";
       id: string;
@@ -275,7 +278,7 @@ export type UserSlowmodes = {
 type ReadyData = {
   users: User[];
   servers: Server[];
-  channels: Channel[];
+  channels: (Channel | ThreadChannelData)[];
   members: Member[];
   emojis: Emoji[];
   voice_states: ChannelVoiceState[];
@@ -334,7 +337,12 @@ export async function handleEvent(
 
         if (event.channels) {
           for (const channel of event.channels) {
-            client.channels.getOrCreate(channel._id, channel);
+            const instance = client.channels.getOrCreate(channel._id, channel);
+            // Ready only ever includes threads the user has JOINED, so seed
+            // self-membership — the wire shape carries no membership list.
+            if (instance.isThread && client.user) {
+              instance.threadMembers.add(client.user.id);
+            }
           }
         }
 
@@ -554,7 +562,10 @@ export async function handleEvent(
     }
     case "ChannelCreate": {
       if (!client.channels.has(event._id)) {
-        client.channels.getOrCreate(event._id, event, true);
+        const channel = client.channels.getOrCreate(event._id, event, true);
+        if (channel.isThread) {
+          client.emit("threadCreate", channel);
+        }
       }
       break;
     }
@@ -678,6 +689,32 @@ export async function handleEvent(
       const channel = client.channels.getOrPartial(event.id);
       if (channel) {
         client.emit("channelAcknowledged", channel, event.message_id);
+      }
+      break;
+    }
+    case "ThreadMemberJoin": {
+      const channel = client.channels.getOrPartial(event.id);
+      if (channel) {
+        if (!channel.threadMembers.has(event.user)) {
+          channel.threadMembers.add(event.user);
+        } else if (!client.channels.isPartial(event.id)) {
+          return;
+        }
+
+        client.emit("threadMemberJoin", channel, event.user);
+      }
+      break;
+    }
+    case "ThreadMemberLeave": {
+      const channel = client.channels.getOrPartial(event.id);
+      if (channel) {
+        if (channel.threadMembers.has(event.user)) {
+          channel.threadMembers.delete(event.user);
+        } else if (!client.channels.isPartial(event.id)) {
+          return;
+        }
+
+        client.emit("threadMemberLeave", channel, event.user);
       }
       break;
     }
@@ -1081,7 +1118,15 @@ export async function handleEvent(
     case "E2EEDeviceCreate":
     case "E2EEDeviceDelete":
     case "E2EEChallenge":
-    case "E2EEClaimResult": {
+    case "E2EEClaimResult":
+    // Media E2EE (MLS, slice 6): the join-intent trigger and the
+    // commit/Welcome envelope pushes. Same opaque-relay contract — routed to
+    // the active call session's sink inside the bridge; no adapter/session =
+    // no-op and the envelopes stay queued + unacked server-side.
+    case "MlsJoinRequested":
+    case "MlsCommit":
+    case "MlsWelcome":
+    case "MlsCtl": {
       // Forwarded verbatim to the native-layer bridge; ciphertext and key
       // material are opaque to this library. No adapter (web) = no-op —
       // envelopes stay queued server-side for the user's real devices.

@@ -6,22 +6,43 @@ import { decodeTime } from "ulid";
 
 import type { Client } from "../Client.js";
 
+import type { Channel } from "./Channel.js";
 import type { User } from "./User.js";
 import { Message } from "./index.js";
+
+/**
+ * System message types — stoat-api 0.13.5 predates threads, so the
+ * `thread_created` wire type is declared locally (CalendarEvent precedent).
+ */
+export type SystemMessageType = APISystemMessage["type"] | "thread_created";
+
+/**
+ * Serialized `SystemMessage::ThreadCreated { id, by, name }` posted into the
+ * parent channel when a thread is created (server-authored only).
+ */
+interface APIThreadCreatedSystemMessage {
+  type: "thread_created";
+  /** Thread (channel) id */
+  id: string;
+  /** User who created the thread */
+  by: string;
+  /** Thread name at creation time */
+  name: string;
+}
 
 /**
  * System Message
  */
 export abstract class SystemMessage {
   protected client?: Client;
-  readonly type: APISystemMessage["type"];
+  readonly type: SystemMessageType;
 
   /**
    * Construct System Message
    * @param client Client
    * @param type Type
    */
-  constructor(client: Client, type: APISystemMessage["type"]) {
+  constructor(client: Client, type: SystemMessageType) {
     this.client = client;
     this.type = type;
   }
@@ -37,6 +58,15 @@ export abstract class SystemMessage {
     parent: APIMessage,
     message: APISystemMessage,
   ): SystemMessage {
+    // Handled ahead of the switch: "thread_created" is not part of the
+    // stoat-api 0.13.5 union, so it must not widen the narrowing below.
+    if ((message as { type: string }).type === "thread_created") {
+      return new ThreadCreatedSystemMessage(
+        client,
+        message as unknown as APIThreadCreatedSystemMessage,
+      );
+    }
+
     switch (message.type) {
       case "text":
         return new TextSystemMessage(client, message);
@@ -314,6 +344,42 @@ export class CallStartedSystemMessage extends SystemMessage {
 
   /**
    * User that started the call
+   */
+  get by(): User | undefined {
+    return this.client!.users.get(this.byId);
+  }
+}
+
+/**
+ * Thread Created System Message — posted into the PARENT channel by the
+ * server when a thread is created (never client-authored)
+ */
+export class ThreadCreatedSystemMessage extends SystemMessage {
+  readonly threadId: string;
+  readonly byId: string;
+  readonly name: string;
+
+  /**
+   * Construct System Message
+   * @param client Client
+   * @param systemMessage System Message
+   */
+  constructor(client: Client, systemMessage: APIThreadCreatedSystemMessage) {
+    super(client, systemMessage.type);
+    this.threadId = systemMessage.id;
+    this.byId = systemMessage.by;
+    this.name = systemMessage.name;
+  }
+
+  /**
+   * Thread that was created, if cached
+   */
+  get thread(): Channel | undefined {
+    return this.client!.channels.get(this.threadId);
+  }
+
+  /**
+   * User that created the thread
    */
   get by(): User | undefined {
     return this.client!.users.get(this.byId);

@@ -208,6 +208,21 @@ export class Message {
     );
   }
 
+  /**
+   * ID of the thread anchored to this message, if one was created from it
+   * (server-stamped)
+   */
+  get threadId(): string | undefined {
+    return this.#collection.getUnderlyingObject(this.id).threadId;
+  }
+
+  /**
+   * Thread anchored to this message, if one was created from it
+   */
+  get thread(): Channel | undefined {
+    const id = this.threadId;
+    return id ? this.#collection.client.channels.get(id) : undefined;
+  }
 
   /**
    * IDs of messages this message replies to
