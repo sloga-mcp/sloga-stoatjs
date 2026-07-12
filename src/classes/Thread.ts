@@ -25,6 +25,8 @@ export interface ThreadChannelData {
   /** One of 60 / 1440 / 4320 / 10080 (minutes). */
   auto_archive_minutes?: number;
   locked?: boolean;
+  /** Forum-tag ids applied to this thread (forum posts only). */
+  applied_tags?: string[];
 }
 
 /**

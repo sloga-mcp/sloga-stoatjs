@@ -4,6 +4,11 @@ import type { Channel as APIChannel } from "stoat-api";
 
 import type { Client } from "../Client.js";
 import { File } from "../classes/File.js";
+import type {
+  ForumChannelData,
+  ForumSortOrder,
+  ForumTag,
+} from "../classes/Forum.js";
 import type { ThreadChannelData } from "../classes/Thread.js";
 import { VoiceParticipant } from "../classes/VoiceParticipant.js";
 import type { Merge } from "../lib/merge.js";
@@ -12,7 +17,7 @@ import type { Hydrate } from "./index.js";
 
 export type HydratedChannel = {
   id: string;
-  channelType: APIChannel["channel_type"] | "Thread";
+  channelType: APIChannel["channel_type"] | "Thread" | "Forum";
 
   name: string;
   description?: string;
@@ -44,10 +49,17 @@ export type HydratedChannel = {
   archivedTimestamp?: Date;
   autoArchiveMinutes?: number;
   locked: boolean;
+
+  // Forum ("Forum" channel_type) fields — additive, absent on other types.
+  tags?: ForumTag[];
+  requireTag: boolean;
+  defaultSort?: ForumSortOrder;
+  // Forum-post (thread under a forum) applied tag ids.
+  appliedTags?: string[];
 };
 
 export const channelHydration: Hydrate<
-  Merge<APIChannel | ThreadChannelData>,
+  Merge<APIChannel | ThreadChannelData | ForumChannelData>,
   HydratedChannel
 > = {
   keyMapping: {
@@ -66,6 +78,10 @@ export const channelHydration: Hydrate<
     creator: "creatorId",
     archived_timestamp: "archivedTimestamp",
     auto_archive_minutes: "autoArchiveMinutes",
+    tags: "tags",
+    require_tag: "requireTag",
+    default_sort: "defaultSort",
+    applied_tags: "appliedTags",
   },
   functions: {
     id: (channel) => channel._id,
@@ -115,11 +131,16 @@ export const channelHydration: Hydrate<
         : undefined,
     autoArchiveMinutes: (channel) => channel.auto_archive_minutes,
     locked: (channel) => channel.locked || false,
+    tags: (channel) => channel.tags ?? [],
+    requireTag: (channel) => channel.require_tag || false,
+    defaultSort: (channel) => channel.default_sort ?? "LatestActivity",
+    appliedTags: (channel) => channel.applied_tags ?? [],
   },
   initialHydration: () => ({
     typingIds: new ReactiveSet(),
     recipientIds: new ReactiveSet(),
     archived: false,
     locked: false,
+    requireTag: false,
   }),
 };

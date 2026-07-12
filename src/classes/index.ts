@@ -7,6 +7,7 @@ export * from "./ChannelWebhook.js";
 export * from "./E2EE.js";
 export * from "./Emoji.js";
 export * from "./File.js";
+export * from "./Forum.js";
 export * from "./Invite.js";
 export * from "./Message.js";
 export * from "./MessageEmbed.js";

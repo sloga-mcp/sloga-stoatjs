@@ -580,7 +580,9 @@ export async function handleEvent(
 
         if (event.clear) {
           for (const remove of event.clear) {
-            switch (remove) {
+            // "Tags" is an additive FieldsChannel variant the generated
+            // stoat-api union predates.
+            switch (remove as string) {
               case "Description":
                 changes["description"] = undefined;
                 break;
@@ -589,6 +591,9 @@ export async function handleEvent(
                 break;
               case "Icon":
                 changes["icon"] = undefined;
+                break;
+              case "Tags":
+                changes["tags"] = [];
                 break;
             }
           }

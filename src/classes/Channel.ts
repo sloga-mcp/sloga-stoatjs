@@ -29,6 +29,13 @@ import type { File } from "./File.js";
 import type { Message } from "./Message.js";
 import type { Server } from "./Server.js";
 import type { ServerMember } from "./ServerMember.js";
+import type {
+  DataCreateForumPost,
+  ForumPostResponse,
+  ForumPostsResponse,
+  ForumSortOrder,
+  ForumTag,
+} from "./Forum.js";
 import type { DataCreateThread, ThreadChannelData } from "./Thread.js";
 import type { User } from "./User.js";
 import { VoiceParticipant } from "./VoiceParticipant.js";
@@ -85,7 +92,7 @@ export class Channel {
   /**
    * Channel type
    */
-  get type(): APIChannel["channel_type"] | "Thread" {
+  get type(): APIChannel["channel_type"] | "Thread" | "Forum" {
     return this.#collection.getUnderlyingObject(this.id).channelType;
   }
 
@@ -245,6 +252,51 @@ export class Channel {
    */
   get isThread(): boolean {
     return this.type === "Thread";
+  }
+
+  /**
+   * Whether this channel is a forum
+   */
+  get isForum(): boolean {
+    return this.type === "Forum";
+  }
+
+  /**
+   * Whether this thread is a forum post (its parent is a forum)
+   */
+  get isForumPost(): boolean {
+    return this.isThread && this.parent?.type === "Forum";
+  }
+
+  /**
+   * Tags that can be applied to posts (forums only)
+   */
+  get tags(): ForumTag[] {
+    return this.#collection.getUnderlyingObject(this.id).tags ?? [];
+  }
+
+  /**
+   * Whether every post must carry at least one tag (forums only)
+   */
+  get requireTag(): boolean {
+    return this.#collection.getUnderlyingObject(this.id).requireTag || false;
+  }
+
+  /**
+   * Default ordering of the post browse view (forums only)
+   */
+  get defaultSort(): ForumSortOrder {
+    return (
+      this.#collection.getUnderlyingObject(this.id).defaultSort ??
+      "LatestActivity"
+    );
+  }
+
+  /**
+   * Ids of the forum tags applied to this post (forum-post threads only)
+   */
+  get appliedTags(): string[] {
+    return this.#collection.getUnderlyingObject(this.id).appliedTags ?? [];
   }
 
   /**
@@ -954,6 +1006,89 @@ export class Channel {
     });
 
     return members;
+  }
+
+  /**
+   * Create a post in this forum
+   * @param data Post creation data (title, tags, starter message)
+   * @requires `Forum` — the server rejects every other channel type
+   * @returns The newly-created post and its starter message
+   */
+  async createPost(
+    data: DataCreateForumPost,
+  ): Promise<{ post: Channel; message: Message }> {
+    const response = (await this.#collection.apiReq(
+      "POST",
+      `/channels/${this.id}/posts`,
+      { body: data },
+    )) as ForumPostResponse;
+
+    const post = this.#collection.getOrCreate(
+      response.post._id,
+      response.post,
+      true,
+    );
+    // The server auto-joins the creator; reflect that immediately.
+    const self = this.#collection.client.user;
+    if (self) post.threadMembers.add(self.id);
+    // The WS ChannelCreate for our own creation is deduplicated (the channel
+    // is already cached), so emit threadCreate locally too.
+    this.#collection.client.emit("threadCreate", post);
+
+    const message = this.#collection.client.messages.getOrCreate(
+      response.message._id,
+      response.message,
+    );
+    return { post, message };
+  }
+
+  /**
+   * Fetch posts of this forum
+   * @param params sort: latest_activity (default) | creation_date;
+   *   tag: filter to a tag id; archived: list archived posts instead;
+   *   before: cursor on the sort key; limit: 1..=100;
+   *   includeStarters: also fetch each post's starter message
+   * @requires `Forum`
+   * @returns Posts, plus starter messages when requested
+   */
+  async fetchPosts(params?: {
+    sort?: "latest_activity" | "creation_date";
+    tag?: string;
+    archived?: boolean;
+    before?: string;
+    limit?: number;
+    includeStarters?: boolean;
+  }): Promise<{ posts: Channel[]; starters?: Message[] }> {
+    const { includeStarters, ...rest } = params ?? {};
+    const response = (await this.#collection.apiReq(
+      "GET",
+      `/channels/${this.id}/posts`,
+      {
+        query: {
+          ...rest,
+          include_starters: includeStarters,
+        },
+      },
+    )) as ForumPostsResponse;
+
+    return batch(() => ({
+      posts: response.posts.map((post) =>
+        this.#collection.getOrCreate(post._id, post),
+      ),
+      starters: response.starters?.map((starter) =>
+        this.#collection.client.messages.getOrCreate(starter._id, starter),
+      ),
+    }));
+  }
+
+  /**
+   * Edit the tags applied to this forum post
+   * @param tags Tag ids (replaces the whole set; moderated tags require
+   *   `ManageChannel` on the forum)
+   * @requires `Thread` whose parent is a `Forum`
+   */
+  async editAppliedTags(tags: string[]): Promise<void> {
+    await this.edit({ applied_tags: tags } as DataEditChannel);
   }
 
   /**

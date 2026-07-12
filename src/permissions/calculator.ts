@@ -101,14 +101,16 @@ export function calculatePermission(
       }
       case "Thread": {
         // Threads own no overrides of their own — permissions delegate
-        // entirely to the parent server channel (mirrors the server's
-        // parent-substituted permission query). Deny-all when the parent
-        // is missing or not a server text channel, so a role denied
-        // ViewChannel on the parent can never read the thread.
+        // entirely to the parent channel (text channel, or forum for forum
+        // posts; mirrors the server's parent-substituted permission query).
+        // Deny-all when the parent is missing or not thread-capable, so a
+        // role denied ViewChannel on the parent can never read the thread.
         const parent = target.parent;
-        if (!parent || parent.type !== "TextChannel") return 0n;
+        if (!parent || (parent.type !== "TextChannel" && parent.type !== "Forum"))
+          return 0n;
         return calculatePermission(client, parent, options);
       }
+      case "Forum":
       case "TextChannel": {
         // 2. Get server.
         const server = target.server;
