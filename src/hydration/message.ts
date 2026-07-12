@@ -4,6 +4,7 @@ import type { Embed, Interactions, Masquerade, Message } from "stoat-api";
 
 import type { Client } from "../Client.js";
 import { File } from "../classes/File.js";
+import type { MessageInteractionData } from "../classes/Interaction.js";
 import { MessageWebhook } from "../classes/Message.js";
 import { MessageEmbed } from "../classes/MessageEmbed.js";
 import { SystemMessage } from "../classes/SystemMessage.js";
@@ -32,11 +33,17 @@ export type HydratedMessage = {
   flags?: MessageFlags;
   /** Thread anchored to this message (server-stamped, never client-sent). */
   threadId?: string;
+  /** "used /cmd" context (server-stamped by the interaction respond route). */
+  commandContext?: MessageInteractionData;
 };
 
 export const messageHydration: Hydrate<
-  // `thread_id` is additive and server-set; stoat-api 0.13.5 predates it.
-  Merge<Message> & { thread_id?: string },
+  // `thread_id`/`command_context` are additive and server-set; stoat-api
+  // 0.13.5 predates them.
+  Merge<Message> & {
+    thread_id?: string;
+    command_context?: MessageInteractionData;
+  },
   HydratedMessage
 > = {
   keyMapping: {
@@ -48,6 +55,7 @@ export const messageHydration: Hydrate<
     mentions: "mentionIds",
     replies: "replyIds",
     thread_id: "threadId",
+    command_context: "commandContext",
   },
   functions: {
     id: (message) => message._id,
@@ -90,6 +98,7 @@ export const messageHydration: Hydrate<
         ? message.flags!
         : message.flags & ~MessageFlags.Encrypted,
     threadId: (message) => message.thread_id,
+    commandContext: (message) => message.command_context,
   },
   initialHydration: () => ({
     reactions: new ReactiveMap(),
@@ -114,9 +123,29 @@ export enum MessageFlags {
    */
   MentionsOnline = 3,
   /**
+   * Message is a bot's response to a slash-command interaction — a bit
+   * POSITION like the values above, NOT a mask. Server-set only (the send
+   * path rejects client flags above 7), so with `command_context` it proves
+   * the "used /cmd" attribution. Test via {@link messageFlagAtPosition}.
+   */
+  Interaction = 5,
+  /**
    * CLIENT-ASSIGNED, never sent to or received from the server: this
    * message was end-to-end encrypted and lives only in the device-local
    * store (injected by the native E2EE bridge). Drives the lock indicator.
+   * NOTE: unlike the values above this is a MASK, not a bit position.
    */
   Encrypted = 1 << 30,
+}
+
+/**
+ * Whether a message flag bitfield has the bit at the given POSITION set —
+ * mirrors the server's `MessageFlagsValue::has` (`flags & (1 << position)`).
+ * Do NOT use for {@link MessageFlags.Encrypted}, which is a mask.
+ */
+export function messageFlagAtPosition(
+  flags: number | undefined,
+  position: MessageFlags,
+): boolean {
+  return (((flags ?? 0) >> position) & 1) === 1;
 }

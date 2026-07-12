@@ -10,6 +10,7 @@ import type { CalendarEvent, EventRsvpData } from "./classes/CalendarEvent.js";
 import type { Channel } from "./classes/Channel.js";
 import type { E2EEAdapter } from "./classes/E2EE.js";
 import type { Emoji } from "./classes/Emoji.js";
+import type { InteractionCreateEvent } from "./classes/Interaction.js";
 import type { Message } from "./classes/Message.js";
 import type { Server } from "./classes/Server.js";
 import type { ServerMember } from "./classes/ServerMember.js";
@@ -112,6 +113,9 @@ export type Events = {
   calendarEventUpdate: [event: CalendarEvent];
   calendarEventInvite: [event: CalendarEvent];
   calendarEventRsvp: [event: CalendarEvent, rsvp: EventRsvpData];
+
+  /** Bot-facing: a slash command was invoked on this bot (private topic). */
+  interactionCreate: [interaction: InteractionCreateEvent];
 
   voiceChannelJoin: [channel: Channel, userId: string];
   voiceChannelLeave: [channel: Channel, userId: string];

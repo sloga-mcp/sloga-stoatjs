@@ -11,10 +11,11 @@ import { decodeTime } from "ulid";
 
 import type { Client } from "../Client.js";
 import type { MessageCollection } from "../collections/MessageCollection.js";
-import { MessageFlags } from "../hydration/message.js";
+import { MessageFlags, messageFlagAtPosition } from "../hydration/message.js";
 
 import type { Channel } from "./Channel.js";
 import { File } from "./File.js";
+import type { MessageInteractionData } from "./Interaction.js";
 import type { MessageEmbed } from "./MessageEmbed.js";
 import type { Server } from "./Server.js";
 import type { ServerMember } from "./ServerMember.js";
@@ -264,6 +265,22 @@ export class Message {
    */
   get flags(): number {
     return this.#collection.getUnderlyingObject(this.id).flags || 0;
+  }
+
+  /**
+   * "used /cmd" context when this message is a bot's response to a slash
+   * command (server-stamped, never client-sent)
+   */
+  get commandContext(): MessageInteractionData | undefined {
+    return this.#collection.getUnderlyingObject(this.id).commandContext;
+  }
+
+  /**
+   * Whether this message is an authentic bot response to a slash command
+   * (the Interaction flag is a bit position only settable server-side)
+   */
+  get isInteractionResponse(): boolean {
+    return messageFlagAtPosition(this.flags, MessageFlags.Interaction);
   }
 
   /**

@@ -36,6 +36,7 @@ import type {
   ForumSortOrder,
   ForumTag,
 } from "./Forum.js";
+import type { ApplicationCommandData } from "./Interaction.js";
 import type { DataCreateThread, ThreadChannelData } from "./Thread.js";
 import type { User } from "./User.js";
 import { VoiceParticipant } from "./VoiceParticipant.js";
@@ -1089,6 +1090,40 @@ export class Channel {
    */
   async editAppliedTags(tags: string[]): Promise<void> {
     await this.edit({ applied_tags: tags } as DataEditChannel);
+  }
+
+  /**
+   * Fetch the slash commands invocable in this channel: commands of bots
+   * present in this server/group, merged from the server and global scopes.
+   * Empty for DMs and saved messages (interactions are structurally
+   * excluded there, E2EE fail-closed).
+   */
+  async fetchCommands(): Promise<ApplicationCommandData[]> {
+    return (await this.#collection.apiReq(
+      "GET",
+      `/channels/${this.id}/commands`,
+    )) as ApplicationCommandData[];
+  }
+
+  /**
+   * Invoke a slash command in this channel
+   * @param commandId Id of the command (from {@link fetchCommands})
+   * @param options Option values keyed by option name (all values are
+   *   strings on the wire; the server validates them against the command's
+   *   typed schema)
+   * @returns Id of the created interaction — the bot's reply arrives as a
+   *   regular message carrying `commandContext`
+   */
+  async createInteraction(
+    commandId: string,
+    options?: Record<string, string>,
+  ): Promise<string> {
+    const response = (await this.#collection.apiReq(
+      "POST",
+      `/channels/${this.id}/interactions`,
+      { body: { command_id: commandId, options: options ?? {} } },
+    )) as { interaction_id: string };
+    return response.interaction_id;
   }
 
   /**

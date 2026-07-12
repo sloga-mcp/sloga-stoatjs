@@ -23,6 +23,7 @@ import type {
 import type { Client } from "../Client.js";
 import type { EventData, EventRsvpData } from "../classes/CalendarEvent.js";
 import type { E2EEClientMessage, E2EEServerEvent } from "../classes/E2EE.js";
+import type { InteractionCreateEvent } from "../classes/Interaction.js";
 import { MessageEmbed } from "../classes/MessageEmbed.js";
 import { ServerRole } from "../classes/ServerRole.js";
 import type { ThreadChannelData } from "../classes/Thread.js";
@@ -230,6 +231,7 @@ type ServerMessage =
   | { type: "CalendarEventUpdate"; event: EventData }
   | { type: "CalendarEventInvite"; event: EventData }
   | { type: "CalendarEventRsvp"; rsvp: EventRsvpData }
+  | { type: "InteractionCreate"; interaction: InteractionCreateEvent }
   | E2EEServerEvent;
 
 /**
@@ -1103,6 +1105,12 @@ export async function handleEvent(
     case "CalendarEventInvite": {
       const instance = client.calendarEvents.upsert(event.event);
       client.emit("calendarEventInvite", instance);
+      break;
+    }
+    case "InteractionCreate": {
+      // Bot-facing (this event only arrives on the bot's own private topic;
+      // it carries the single-use response token). Transient — no collection.
+      client.emit("interactionCreate", event.interaction);
       break;
     }
     case "CalendarEventRsvp": {
