@@ -16,6 +16,17 @@ export type E2EEEnvelope = {
   protocol_version: number;
   sequence: number;
   ciphertext: string;
+  /**
+   * Content discriminator. Absent or `olm` for text envelopes; `mls_commit` /
+   * `mls_welcome` for the media-E2EE MLS handshake envelopes (slice 6), which
+   * additionally carry `group_id` + `epoch`. The server has stamped this on
+   * every envelope since slice 6.1 (defaults to `olm` for legacy rows).
+   */
+  content_type?: "olm" | "mls_commit" | "mls_welcome";
+  /** MLS group id (mls_* content only) */
+  group_id?: string;
+  /** MLS epoch this envelope establishes (mls_* content only) */
+  epoch?: number;
 };
 
 /**
@@ -26,7 +37,28 @@ export type E2EEServerEvent =
   | { type: "E2EEDeviceCreate"; user_id: string; device_id: string }
   | { type: "E2EEDeviceDelete"; user_id: string; device_id: string }
   | { type: "E2EEChallenge"; nonce: string }
-  | { type: "E2EEClaimResult"; device_id: string; accepted: boolean };
+  | { type: "E2EEClaimResult"; device_id: string; accepted: boolean }
+  // Media E2EE (MLS, slice 6). Fanned out on the recipient user's private
+  // topic like E2EEMessage; the adapter routes them to the active call
+  // session. `MlsJoinRequested` is the admit trigger; `MlsCommit` /
+  // `MlsWelcome` wrap an MLS handshake envelope (queue-first, so dedup by
+  // envelope ULID and order per group by consecutive epoch).
+  | {
+      type: "MlsJoinRequested";
+      group_id: string;
+      channel_id: string;
+      user_id: string;
+      device_id: string;
+      key_package_ref: string;
+      signature: string;
+      /** The intent came from a device that is ALREADY a member: its leaf
+       * is stale (local state wiped) and verifying members should REMOVE it
+       * so the device's next normal intent can be admitted. Optional — an
+       * older server never sends it. */
+      rejoin?: boolean;
+    }
+  | ({ type: "MlsCommit" } & E2EEEnvelope)
+  | ({ type: "MlsWelcome" } & E2EEEnvelope);
 
 /**
  * Client messages the adapter may send over the events connection.
