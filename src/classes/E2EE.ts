@@ -22,7 +22,7 @@ export type E2EEEnvelope = {
    * additionally carry `group_id` + `epoch`. The server has stamped this on
    * every envelope since slice 6.1 (defaults to `olm` for legacy rows).
    */
-  content_type?: "olm" | "mls_commit" | "mls_welcome";
+  content_type?: "olm" | "mls_commit" | "mls_welcome" | "mls_ctl";
   /** MLS group id (mls_* content only) */
   group_id?: string;
   /** MLS epoch this envelope establishes (mls_* content only) */
@@ -58,7 +58,11 @@ export type E2EEServerEvent =
       rejoin?: boolean;
     }
   | ({ type: "MlsCommit" } & E2EEEnvelope)
-  | ({ type: "MlsWelcome" } & E2EEEnvelope);
+  | ({ type: "MlsWelcome" } & E2EEEnvelope)
+  // An MLS application-message envelope (the §3.4 downgrade ctl-announce,
+  // slice 6.5). Same ULID-dedup contract as MlsCommit but NO epoch
+  // ordering — a ctl must never park the per-group drain.
+  | ({ type: "MlsCtl" } & E2EEEnvelope);
 
 /**
  * Client messages the adapter may send over the events connection.
