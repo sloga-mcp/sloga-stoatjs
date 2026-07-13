@@ -141,6 +141,12 @@ export interface RespondToInteractionOptions {
    * message (Component interactions only).
    */
   edit?: boolean;
+  /**
+   * Deliver the response only to the invoking user. Ephemeral responses
+   * are never persisted (gone on reload). Incompatible with `edit` and
+   * with `components`.
+   */
+  ephemeral?: boolean;
 }
 
 /**
@@ -168,6 +174,7 @@ export async function respondToInteraction(
         ...(content !== undefined ? { content } : {}),
         ...(options?.components ? { components: options.components } : {}),
         ...(options?.edit ? { edit: true } : {}),
+        ...(options?.ephemeral ? { ephemeral: true } : {}),
       },
     },
   );

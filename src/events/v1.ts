@@ -234,6 +234,7 @@ type ServerMessage =
   | { type: "CalendarEventInvite"; event: EventData }
   | { type: "CalendarEventRsvp"; rsvp: EventRsvpData }
   | { type: "InteractionCreate"; interaction: InteractionCreateEvent }
+  | { type: "InteractionEphemeralMessage"; message: Message }
   | E2EEServerEvent;
 
 /**
@@ -1127,6 +1128,45 @@ export async function handleEvent(
       // Bot-facing (this event only arrives on the bot's own private topic;
       // it carries the single-use response token). Transient — no collection.
       client.emit("interactionCreate", event.interaction);
+      break;
+    }
+    case "InteractionEphemeralMessage": {
+      // An ephemeral interaction response (arrives only on this user's
+      // private topic; never persisted server-side — gone on reload). It
+      // enters the local message collection so it renders like any other
+      // message, but deliberately skips the lastMessageId bump and
+      // unread/mention processing: acks must never reference it.
+      const message = event.message;
+      if (!client.messages.has(message._id)) {
+        const instance = batch(() => {
+          if (message.member) {
+            client.serverMembers.getOrCreate(message.member._id, message.member);
+          }
+
+          if (message.user) {
+            client.users.getOrCreate(message.user._id, message.user);
+          }
+
+          delete message.member;
+          delete message.user;
+
+          // Create WITHOUT the collection's messageCreate emit: the local
+          // ephemeral marker must be stamped first, so listeners (e.g. the
+          // notification worker) see isEphemeral === true. Hydration never
+          // reads `ephemeral` from wire data — this is the only place that
+          // sets it.
+          const instance = client.messages.getOrCreate(message._id, message);
+          client.messages.updateUnderlyingObject(
+            message._id,
+            "ephemeral",
+            true,
+          );
+          return instance;
+        });
+
+        client.emit("messageCreate", instance);
+        client.emit("interactionEphemeral", instance);
+      }
       break;
     }
     case "CalendarEventRsvp": {

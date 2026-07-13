@@ -117,6 +117,13 @@ export type Events = {
   /** Bot-facing: a slash command was invoked on this bot (private topic). */
   interactionCreate: [interaction: InteractionCreateEvent];
 
+  /**
+   * An ephemeral interaction response addressed to this user (private
+   * topic; never persisted — gone on reload). Also emitted as
+   * `messageCreate` so message lists render it.
+   */
+  interactionEphemeral: [message: Message];
+
   voiceChannelJoin: [channel: Channel, userId: string];
   voiceChannelLeave: [channel: Channel, userId: string];
 

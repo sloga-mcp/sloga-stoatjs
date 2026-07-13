@@ -295,6 +295,26 @@ export class Message {
   }
 
   /**
+   * Whether this is an ephemeral interaction response — visible only to
+   * this user and never persisted (gone on reload)
+   */
+  get isEphemeral(): boolean {
+    return this.#collection.getUnderlyingObject(this.id).ephemeral ?? false;
+  }
+
+  /**
+   * Dismiss an ephemeral message. It has no server-side existence, so this
+   * is purely a local removal (emits `messageDelete` so lists drop it);
+   * no-op for regular messages.
+   */
+  dismiss(): void {
+    if (!this.isEphemeral) return;
+    const message = this.#collection.getUnderlyingObject(this.id);
+    this.#collection.client.emit("messageDelete", message);
+    this.#collection.delete(this.id);
+  }
+
+  /**
    * Get the username for this message
    */
   get username(): string | undefined {
@@ -399,6 +419,11 @@ export class Message {
     skipRequest?: boolean,
     skipNextMarking?: boolean,
   ): void {
+    // Ephemeral messages have no server-side existence; acking their ULID
+    // would move the server unread pointer past real messages (an
+    // ephemeral id is minted at respond time, so it sorts after every
+    // persisted message in the channel).
+    if (this.isEphemeral) return;
     this.channel?.ack(this, skipRateLimiter, skipRequest, skipNextMarking);
   }
 

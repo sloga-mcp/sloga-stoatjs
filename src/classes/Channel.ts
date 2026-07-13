@@ -1189,6 +1189,14 @@ export class Channel {
     skipRequest?: boolean,
     skipNextMarking?: boolean,
   ): Promise<void> {
+    // Ephemeral messages have no server-side existence; acking their ULID
+    // (minted at respond time, so newer than every persisted message)
+    // would move the unread pointer past real messages. Message.ack()
+    // already guards this — this covers direct library consumers.
+    if (typeof message === "object" && message?.isEphemeral) {
+      message = undefined;
+    }
+
     if (!message && this.#manuallyMarked) {
       this.#manuallyMarked = false;
       return;

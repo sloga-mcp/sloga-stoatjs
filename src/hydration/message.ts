@@ -40,6 +40,14 @@ export type HydratedMessage = {
   commandContext?: MessageInteractionData;
   /** Interactive components (buttons / selects); bot-authored only. */
   components?: ActionRowData[];
+  /**
+   * Local marker: ephemeral interaction response (delivered only to this
+   * user, never persisted). Deliberately NOT hydrated from wire data — the
+   * InteractionEphemeralMessage event handler stamps it directly onto the
+   * underlying object, so a hostile server cannot mark persisted messages
+   * "ephemeral" (which would suppress notifications and lie in the UI).
+   */
+  ephemeral?: boolean;
 };
 
 export const messageHydration: Hydrate<
@@ -107,6 +115,10 @@ export const messageHydration: Hydrate<
     threadId: (message) => message.thread_id,
     commandContext: (message) => message.command_context,
     components: (message) => message.components,
+    // Deliberately ignores wire data (a hostile server must not be able to
+    // stamp persisted messages "ephemeral"); the
+    // InteractionEphemeralMessage handler sets the flag directly.
+    ephemeral: () => undefined,
   },
   initialHydration: () => ({
     reactions: new ReactiveMap(),
