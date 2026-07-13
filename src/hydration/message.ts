@@ -4,7 +4,10 @@ import type { Embed, Interactions, Masquerade, Message } from "stoat-api";
 
 import type { Client } from "../Client.js";
 import { File } from "../classes/File.js";
-import type { MessageInteractionData } from "../classes/Interaction.js";
+import type {
+  ActionRowData,
+  MessageInteractionData,
+} from "../classes/Interaction.js";
 import { MessageWebhook } from "../classes/Message.js";
 import { MessageEmbed } from "../classes/MessageEmbed.js";
 import { SystemMessage } from "../classes/SystemMessage.js";
@@ -35,14 +38,17 @@ export type HydratedMessage = {
   threadId?: string;
   /** "used /cmd" context (server-stamped by the interaction respond route). */
   commandContext?: MessageInteractionData;
+  /** Interactive components (buttons / selects); bot-authored only. */
+  components?: ActionRowData[];
 };
 
 export const messageHydration: Hydrate<
-  // `thread_id`/`command_context` are additive and server-set; stoat-api
+  // `thread_id`/`command_context`/`components` are additive; stoat-api
   // 0.13.5 predates them.
   Merge<Message> & {
     thread_id?: string;
     command_context?: MessageInteractionData;
+    components?: ActionRowData[];
   },
   HydratedMessage
 > = {
@@ -56,6 +62,7 @@ export const messageHydration: Hydrate<
     replies: "replyIds",
     thread_id: "threadId",
     command_context: "commandContext",
+    components: "components",
   },
   functions: {
     id: (message) => message._id,
@@ -99,6 +106,7 @@ export const messageHydration: Hydrate<
         : message.flags & ~MessageFlags.Encrypted,
     threadId: (message) => message.thread_id,
     commandContext: (message) => message.command_context,
+    components: (message) => message.components,
   },
   initialHydration: () => ({
     reactions: new ReactiveMap(),

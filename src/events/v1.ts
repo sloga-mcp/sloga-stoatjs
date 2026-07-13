@@ -81,6 +81,8 @@ type ServerMessage =
       id: string;
       channel: string;
       data: Partial<Message>;
+      /** Fields removed by this update (`FieldsMessage`). */
+      clear?: ("Pinned" | "Components")[];
     }
   | {
       type: "MessageAppend";
@@ -443,6 +445,20 @@ export async function handleEvent(
           ),
           editedAt: new Date(),
         });
+
+        // Apply cleared fields (e.g. a component edit-response retiring
+        // its rows sends clear: ["Components"])
+        for (const field of event.clear ?? []) {
+          if (field === "Components") {
+            client.messages.updateUnderlyingObject(
+              event.id,
+              "components",
+              undefined,
+            );
+          } else if (field === "Pinned") {
+            client.messages.updateUnderlyingObject(event.id, "pinned", false);
+          }
+        }
 
         client.emit("messageUpdate", message, previousMessage);
       }

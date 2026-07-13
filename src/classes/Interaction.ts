@@ -61,6 +61,43 @@ export type InteractionKind =
   | "Autocomplete"
   | "ModalSubmit";
 
+// ----- Message components (slice 2) -------------------------------------------
+
+/** Visual style of a button component. */
+export type ButtonStyle = "Primary" | "Secondary" | "Success" | "Danger";
+
+/** One choice offered by a string select. */
+export interface SelectOptionData {
+  label: string;
+  value: string;
+}
+
+/** A clickable button (`v0::Component::Button`). */
+export interface ButtonComponent {
+  type: "Button";
+  custom_id: string;
+  label: string;
+  style: ButtonStyle;
+  disabled?: boolean;
+}
+
+/** A single-choice dropdown (`v0::Component::StringSelect`). */
+export interface StringSelectComponent {
+  type: "StringSelect";
+  custom_id: string;
+  options: SelectOptionData[];
+  placeholder?: string;
+  disabled?: boolean;
+}
+
+/** An interactive component on a message (serde tag `type`). */
+export type ComponentData = ButtonComponent | StringSelectComponent;
+
+/** A horizontal row of components (5 buttons, or exactly 1 select). */
+export interface ActionRowData {
+  components: ComponentData[];
+}
+
 /**
  * Wire payload of the `InteractionCreate` event (`v0::Interaction`).
  *
@@ -73,8 +110,14 @@ export interface InteractionCreateEvent {
   channel_id: string;
   user_id: string;
   bot_id: string;
+  /** Message the interaction targets (Component kind). */
+  message_id?: string;
   command_id?: string;
   command_name?: string;
+  /** Custom id of the clicked component (Component kind). */
+  custom_id?: string;
+  /** Submitted select values (Component kind, selects only). */
+  values?: string[];
   options?: Record<string, string>;
   token: string;
 }
@@ -89,22 +132,43 @@ export interface MessageInteractionData {
   command_name: string;
 }
 
+/** Optional extras for {@link respondToInteraction}. */
+export interface RespondToInteractionOptions {
+  /** Components to attach (or replace, when editing). */
+  components?: ActionRowData[];
+  /**
+   * Edit the message the component lives on instead of sending a new
+   * message (Component interactions only).
+   */
+  edit?: boolean;
+}
+
 /**
  * Respond to an interaction as the connected bot.
  *
  * Bot-facing helper (the same library powers bots): pass the id and token
- * received in the `interactionCreate` event. Responds with a regular channel
- * message carrying the unforgeable interaction context.
+ * received in the `interactionCreate` event. Command responses fan out as a
+ * regular channel message carrying the unforgeable interaction context;
+ * component responses may instead pass `edit: true` to update the message
+ * the clicked component lives on.
  */
 export async function respondToInteraction(
   client: Client,
   interactionId: string,
   token: string,
-  content: string,
+  content?: string,
+  options?: RespondToInteractionOptions,
 ): Promise<unknown> {
   return await client.channels.apiReq(
     "POST",
     `/interactions/${interactionId}/respond`,
-    { body: { token, content } },
+    {
+      body: {
+        token,
+        ...(content !== undefined ? { content } : {}),
+        ...(options?.components ? { components: options.components } : {}),
+        ...(options?.edit ? { edit: true } : {}),
+      },
+    },
   );
 }

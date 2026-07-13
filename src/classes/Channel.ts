@@ -1127,6 +1127,33 @@ export class Channel {
   }
 
   /**
+   * Interact with a component (button / select) on a bot message in this
+   * channel
+   * @param messageId Message the component lives on
+   * @param customId Custom id of the clicked component
+   * @param values Selected values (selects only; exactly one)
+   * @returns Id of the created interaction — the bot answers with a new
+   *   message or by editing the component's message
+   */
+  async interactWithMessage(
+    messageId: string,
+    customId: string,
+    values?: string[],
+  ): Promise<string> {
+    const response = (await this.#collection.apiReq(
+      "POST",
+      `/channels/${this.id}/messages/${messageId}/interact`,
+      {
+        body: {
+          custom_id: customId,
+          ...(values && values.length ? { values } : {}),
+        },
+      },
+    )) as { interaction_id: string };
+    return response.interaction_id;
+  }
+
+  /**
    * Archive this thread (requires `ManageChannel` on the parent, or being
    * the thread's creator)
    * @requires `Thread`

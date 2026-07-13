@@ -15,7 +15,10 @@ import { MessageFlags, messageFlagAtPosition } from "../hydration/message.js";
 
 import type { Channel } from "./Channel.js";
 import { File } from "./File.js";
-import type { MessageInteractionData } from "./Interaction.js";
+import type {
+  ActionRowData,
+  MessageInteractionData,
+} from "./Interaction.js";
 import type { MessageEmbed } from "./MessageEmbed.js";
 import type { Server } from "./Server.js";
 import type { ServerMember } from "./ServerMember.js";
@@ -281,6 +284,14 @@ export class Message {
    */
   get isInteractionResponse(): boolean {
     return messageFlagAtPosition(this.flags, MessageFlags.Interaction);
+  }
+
+  /**
+   * Interactive components attached to this message (buttons / selects);
+   * only ever present on bot messages
+   */
+  get components(): ActionRowData[] | undefined {
+    return this.#collection.getUnderlyingObject(this.id).components;
   }
 
   /**
