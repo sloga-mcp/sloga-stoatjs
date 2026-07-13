@@ -117,6 +117,12 @@ export type Events = {
   /** Bot-facing: a slash command was invoked on this bot (private topic). */
   interactionCreate: [interaction: InteractionCreateEvent];
 
+  /** A poll's aggregate counts changed (count-only; ballots never arrive). */
+  pollVoteUpdate: [message: Message];
+
+  /** A poll closed with final results. */
+  pollClose: [message: Message];
+
   /**
    * An ephemeral interaction response addressed to this user (private
    * topic; never persisted — gone on reload). Also emitted as

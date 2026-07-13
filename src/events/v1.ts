@@ -25,6 +25,7 @@ import type { EventData, EventRsvpData } from "../classes/CalendarEvent.js";
 import type { E2EEClientMessage, E2EEServerEvent } from "../classes/E2EE.js";
 import type { InteractionCreateEvent } from "../classes/Interaction.js";
 import { MessageEmbed } from "../classes/MessageEmbed.js";
+import type { PollAnswerCountData } from "../classes/Poll.js";
 import { ServerRole } from "../classes/ServerRole.js";
 import type { ThreadChannelData } from "../classes/Thread.js";
 import { VoiceParticipant } from "../classes/VoiceParticipant.js";
@@ -235,6 +236,22 @@ type ServerMessage =
   | { type: "CalendarEventRsvp"; rsvp: EventRsvpData }
   | { type: "InteractionCreate"; interaction: InteractionCreateEvent }
   | { type: "InteractionEphemeralMessage"; message: Message }
+  | {
+      type: "PollVoteUpdate";
+      id: string;
+      channel_id: string;
+      message_id: string;
+      counts: PollAnswerCountData[];
+      total_votes: number;
+    }
+  | {
+      type: "PollClose";
+      id: string;
+      channel_id: string;
+      message_id: string;
+      counts: PollAnswerCountData[];
+      total_votes: number;
+    }
   | E2EEServerEvent;
 
 /**
@@ -1166,6 +1183,37 @@ export async function handleEvent(
 
         client.emit("messageCreate", instance);
         client.emit("interactionEphemeral", instance);
+      }
+      break;
+    }
+    case "PollVoteUpdate":
+    case "PollClose": {
+      // Count-only aggregate update on the channel topic — ballots (voter
+      // identities) are never broadcast. Only meaningful if the carrying
+      // message is cached; a cold render re-hydrates via fetchPoll instead.
+      const message = client.messages.getOrPartial(event.message_id);
+      if (message && message.poll?.id === event.id) {
+        const current = client.messages.getUnderlyingObject(
+          event.message_id,
+        ).pollState;
+
+        // Final results are final: a straggling count update that lost a
+        // race with the close must not mutate them.
+        if (current?.closed && event.type === "PollVoteUpdate") break;
+
+        client.messages.updateUnderlyingObject(event.message_id, "pollState", {
+          hydrated: false,
+          myVotes: undefined,
+          ...current,
+          counts: event.counts,
+          totalVotes: event.total_votes,
+          closed: event.type === "PollClose" ? true : (current?.closed ?? false),
+        });
+
+        client.emit(
+          event.type === "PollClose" ? "pollClose" : "pollVoteUpdate",
+          message,
+        );
       }
       break;
     }

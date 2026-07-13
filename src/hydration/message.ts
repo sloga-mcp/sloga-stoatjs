@@ -10,6 +10,7 @@ import type {
 } from "../classes/Interaction.js";
 import { MessageWebhook } from "../classes/Message.js";
 import { MessageEmbed } from "../classes/MessageEmbed.js";
+import type { PollDefinitionData, PollState } from "../classes/Poll.js";
 import { SystemMessage } from "../classes/SystemMessage.js";
 import type { Merge } from "../lib/merge.js";
 
@@ -41,6 +42,17 @@ export type HydratedMessage = {
   /** Interactive components (buttons / selects); bot-authored only. */
   components?: ActionRowData[];
   /**
+   * Immutable poll definition (server-stamped by the poll create route,
+   * never client-sent — the regular send path has no poll field).
+   */
+  poll?: PollDefinitionData;
+  /**
+   * Local dynamic poll state (counts / closed / own ballot). NOT hydrated
+   * from message wire data — stamped by fetchPoll / vote responses and the
+   * PollVoteUpdate / PollClose events.
+   */
+  pollState?: PollState;
+  /**
    * Local marker: ephemeral interaction response (delivered only to this
    * user, never persisted). Deliberately NOT hydrated from wire data — the
    * InteractionEphemeralMessage event handler stamps it directly onto the
@@ -57,6 +69,7 @@ export const messageHydration: Hydrate<
     thread_id?: string;
     command_context?: MessageInteractionData;
     components?: ActionRowData[];
+    poll?: PollDefinitionData;
   },
   HydratedMessage
 > = {
@@ -71,6 +84,7 @@ export const messageHydration: Hydrate<
     thread_id: "threadId",
     command_context: "commandContext",
     components: "components",
+    poll: "poll",
   },
   functions: {
     id: (message) => message._id,
@@ -115,6 +129,10 @@ export const messageHydration: Hydrate<
     threadId: (message) => message.thread_id,
     commandContext: (message) => message.command_context,
     components: (message) => message.components,
+    poll: (message) => message.poll,
+    // Never from wire data — dynamic state lives in the polls routes and
+    // the PollVoteUpdate/PollClose events, not on the message payload.
+    pollState: () => undefined,
     // Deliberately ignores wire data (a hostile server must not be able to
     // stamp persisted messages "ephemeral"); the
     // InteractionEphemeralMessage handler sets the flag directly.

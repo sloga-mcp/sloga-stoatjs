@@ -12,6 +12,7 @@ export * from "./Interaction.js";
 export * from "./Invite.js";
 export * from "./Message.js";
 export * from "./MessageEmbed.js";
+export * from "./Poll.js";
 export * from "./PublicBot.js";
 export * from "./PublicInvite.js";
 export * from "./ServerRole.js";

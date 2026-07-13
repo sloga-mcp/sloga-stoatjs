@@ -20,6 +20,12 @@ import type {
   MessageInteractionData,
 } from "./Interaction.js";
 import type { MessageEmbed } from "./MessageEmbed.js";
+import {
+  pollStateFromWire,
+  type PollData,
+  type PollDefinitionData,
+  type PollState,
+} from "./Poll.js";
 import type { Server } from "./Server.js";
 import type { ServerMember } from "./ServerMember.js";
 import { ServerRole } from "./ServerRole.js";
@@ -312,6 +318,153 @@ export class Message {
     const message = this.#collection.getUnderlyingObject(this.id);
     this.#collection.client.emit("messageDelete", message);
     this.#collection.delete(this.id);
+  }
+
+  /**
+   * Immutable poll definition when this message carries a poll
+   * (server-stamped by the poll create route — unforgeable, the regular
+   * send path has no poll field and rejects the Poll flag bit)
+   */
+  get poll(): PollDefinitionData | undefined {
+    return this.#collection.getUnderlyingObject(this.id).poll;
+  }
+
+  /**
+   * Whether this message carries a poll
+   */
+  get isPoll(): boolean {
+    return this.poll !== undefined;
+  }
+
+  /**
+   * Dynamic poll state (counts / closed / own ballot), if hydrated.
+   * Populated by {@link fetchPoll}, vote calls and the
+   * `PollVoteUpdate` / `PollClose` events.
+   */
+  get pollState(): PollState | undefined {
+    return this.#collection.getUnderlyingObject(this.id).pollState;
+  }
+
+  /**
+   * Stamp new dynamic poll state onto the message (merging over what is
+   * already known so a count-only WS update never erases `myVotes`).
+   */
+  #mergePollState(next: Partial<PollState> & { hydrated?: boolean }): void {
+    const current = this.pollState;
+    this.#collection.updateUnderlyingObject(this.id, "pollState", {
+      closed: false,
+      hydrated: false,
+      ...current,
+      ...next,
+    });
+  }
+
+  /**
+   * Apply wire poll state onto this message (used by the client's bulk
+   * hydration — one `POST …/polls/fetch` per page of messages).
+   */
+  applyPollState(data: PollData): void {
+    this.#mergePollState(pollStateFromWire(data));
+  }
+
+  /**
+   * Fetch this message's poll state from the API. Counts arrive only when
+   * the server allows this user to see them (voted / author / moderator /
+   * closed) — hidden-until-vote is enforced server-side.
+   */
+  async fetchPoll(): Promise<PollState | undefined> {
+    const poll = this.poll;
+    if (!poll) return undefined;
+
+    const data = (await this.#collection.client.channels.apiReq(
+      "GET",
+      `/channels/${this.channelId}/polls/${poll.id}`,
+    )) as PollData;
+
+    this.#mergePollState(pollStateFromWire(data));
+    return this.pollState;
+  }
+
+  /**
+   * Cast (or replace) this user's ballot on the poll.
+   * @param answerIds Selected answer ids (exactly one unless multi-select)
+   */
+  async votePoll(answerIds: number[]): Promise<void> {
+    const poll = this.poll;
+    if (!poll) return;
+
+    const data = (await this.#collection.client.channels.apiReq(
+      "PUT",
+      `/channels/${this.channelId}/polls/${poll.id}/vote`,
+      { body: { answer_ids: answerIds } },
+    )) as PollData;
+
+    this.#mergePollState(pollStateFromWire(data));
+  }
+
+  /**
+   * Retract this user's ballot from the poll.
+   */
+  async removePollVote(): Promise<void> {
+    const poll = this.poll;
+    if (!poll) return;
+
+    const data = (await this.#collection.client.channels.apiReq(
+      "DELETE",
+      `/channels/${this.channelId}/polls/${poll.id}/vote`,
+    )) as PollData;
+
+    // The wire response reflects the retraction (counts may now be hidden
+    // again for this user); myVotes must be cleared explicitly since the
+    // merge otherwise preserves it.
+    this.#mergePollState({ ...pollStateFromWire(data), myVotes: undefined });
+  }
+
+  /**
+   * Close the poll now and publish final results. Author or ManageMessages
+   * only.
+   */
+  async endPoll(): Promise<void> {
+    const poll = this.poll;
+    if (!poll) return;
+
+    const data = (await this.#collection.client.channels.apiReq(
+      "POST",
+      `/channels/${this.channelId}/polls/${poll.id}/end`,
+    )) as PollData;
+
+    this.#mergePollState(pollStateFromWire(data));
+  }
+
+  /**
+   * List the users who voted for a given answer. Author or ManageMessages
+   * only — ballots are never exposed to regular voters.
+   */
+  async fetchPollVoters(
+    answerId: number,
+    options?: { after?: string; limit?: number },
+  ): Promise<User[]> {
+    const poll = this.poll;
+    if (!poll) return [];
+
+    const response = (await this.#collection.client.channels.apiReq(
+      "GET",
+      `/channels/${this.channelId}/polls/${poll.id}/voters`,
+      {
+        query: {
+          answer_id: answerId,
+          after: options?.after,
+          limit: options?.limit,
+        },
+      },
+    )) as { users: { _id: string }[] };
+
+    return response.users.map((user) =>
+      this.#collection.client.users.getOrCreate(
+        user._id,
+        user as never,
+      ),
+    );
   }
 
   /**

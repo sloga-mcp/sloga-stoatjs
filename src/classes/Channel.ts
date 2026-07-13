@@ -37,6 +37,7 @@ import type {
   ForumTag,
 } from "./Forum.js";
 import type { ApplicationCommandData } from "./Interaction.js";
+import type { DataPollCreate } from "./Poll.js";
 import type { DataCreateThread, ThreadChannelData } from "./Thread.js";
 import type { User } from "./User.js";
 import { VoiceParticipant } from "./VoiceParticipant.js";
@@ -719,6 +720,31 @@ export class Channel {
     return this.#collection.client.messages.getOrCreate(
       message._id,
       message,
+      true,
+    );
+  }
+
+  /**
+   * Create a poll in this channel. The server assembles the message
+   * (Poll flag + embedded definition) and counts votes authoritatively.
+   * @param data Poll creation data
+   * @requires a server-mediated channel; the composer additionally hides
+   *   polls for E2EE conversations (they are plaintext by construction)
+   * @returns The newly-created poll message
+   */
+  async createPoll(
+    data: DataPollCreate,
+    idempotencyKey: string = ulid(),
+  ): Promise<Message> {
+    const message = (await this.#collection.apiReq(
+      "POST",
+      `/channels/${this.id}/polls`,
+      { body: { ...data, nonce: data.nonce ?? idempotencyKey } },
+    )) as { _id: string };
+
+    return this.#collection.client.messages.getOrCreate(
+      message._id,
+      message as never,
       true,
     );
   }
