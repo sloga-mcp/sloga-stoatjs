@@ -38,6 +38,7 @@ import type {
 } from "./Forum.js";
 import type { ApplicationCommandData } from "./Interaction.js";
 import type { DataPollCreate } from "./Poll.js";
+import type { ScheduledMessageData } from "./ScheduledMessage.js";
 import type { DataCreateThread, ThreadChannelData } from "./Thread.js";
 import type { User } from "./User.js";
 import { VoiceParticipant } from "./VoiceParticipant.js";
@@ -747,6 +748,75 @@ export class Channel {
       message as never,
       true,
     );
+  }
+
+  /**
+   * Schedule a message for later delivery to this channel. The payload is
+   * stored server-side and sent through the normal message path when due
+   * (~30s jitter); permissions are re-checked at fire time.
+   * @param data Message payload (same shape as a live send)
+   * @param scheduledAt When to send (ms since epoch; 30s .. 30d from now)
+   * @requires a server-mediated channel; the composer additionally blocks
+   *   scheduling for E2EE conversations (the payload is stored plaintext)
+   * @returns The pending row (also stamped into
+   *   {@link Client.scheduledMessages})
+   */
+  async scheduleMessage(
+    data: Omit<DataMessageSend, "nonce">,
+    scheduledAt: number,
+    idempotencyKey: string = ulid(),
+  ): Promise<ScheduledMessageData> {
+    const row = (await this.#collection.apiReq(
+      "POST",
+      `/channels/${this.id}/scheduled_messages`,
+      {
+        body: {
+          ...data,
+          nonce: idempotencyKey,
+          scheduled_at: scheduledAt,
+        },
+      },
+    )) as ScheduledMessageData;
+
+    this.#collection.client.scheduledMessages.set(row._id, row);
+    return row;
+  }
+
+  /**
+   * Fetch the current user's pending scheduled messages in this channel
+   * (strictly author-scoped server-side), refreshing
+   * {@link Client.scheduledMessages}.
+   */
+  async fetchScheduledMessages(): Promise<ScheduledMessageData[]> {
+    const rows = (await this.#collection.apiReq(
+      "GET",
+      `/channels/${this.id}/scheduled_messages`,
+    )) as ScheduledMessageData[];
+
+    const map = this.#collection.client.scheduledMessages;
+    // Replace this channel's entries wholesale — a row may have fired or
+    // been cancelled while we were away.
+    for (const [id, row] of map) {
+      if (row.channel === this.id) map.delete(id);
+    }
+    for (const row of rows) {
+      map.set(row._id, row);
+    }
+
+    return rows;
+  }
+
+  /**
+   * Cancel one of the current user's pending scheduled messages in this
+   * channel. Fails once the delivery daemon has claimed the row.
+   */
+  async cancelScheduledMessage(id: string): Promise<void> {
+    await this.#collection.apiReq(
+      "DELETE",
+      `/channels/${this.id}/scheduled_messages/${id}`,
+    );
+
+    this.#collection.client.scheduledMessages.delete(id);
   }
 
   /**

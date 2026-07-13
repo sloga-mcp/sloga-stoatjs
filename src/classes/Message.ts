@@ -7,7 +7,7 @@ import type {
   DataMessageSend,
   Masquerade,
 } from "stoat-api";
-import { decodeTime } from "ulid";
+import { decodeTime, ulid } from "ulid";
 
 import type { Client } from "../Client.js";
 import type { MessageCollection } from "../collections/MessageCollection.js";
@@ -15,6 +15,7 @@ import { MessageFlags, messageFlagAtPosition } from "../hydration/message.js";
 
 import type { Channel } from "./Channel.js";
 import { File } from "./File.js";
+import type { HydratedForwardedSnapshot } from "./ForwardedMessage.js";
 import type {
   ActionRowData,
   MessageInteractionData,
@@ -464,6 +465,50 @@ export class Message {
         user._id,
         user as never,
       ),
+    );
+  }
+
+  /**
+   * Immutable forwarded-message snapshot when this message is a forward
+   * (server-stamped by the forward route, which verified the forwarder
+   * could read the source — unforgeable, the regular send/edit paths have
+   * no such field). Snapshot semantics: edits or deletion of the original
+   * do not propagate.
+   */
+  get forwarded(): HydratedForwardedSnapshot | undefined {
+    return this.#collection.getUnderlyingObject(this.id).forwarded;
+  }
+
+  /**
+   * Whether this message forwards another message
+   */
+  get isForwarded(): boolean {
+    return this.forwarded !== undefined;
+  }
+
+  /**
+   * Forward this message to another channel. The server copies an
+   * immutable snapshot (content + attachments) and verifies this user can
+   * both read the source and send in the destination.
+   * @param destination Channel (or channel id) to forward to
+   * @returns The newly-created forward message
+   */
+  async forwardTo(
+    destination: string | Channel,
+    idempotencyKey: string = ulid(),
+  ): Promise<Message> {
+    const destinationId =
+      typeof destination === "string" ? destination : destination.id;
+
+    const message = (await this.#collection.client.channels.apiReq(
+      "POST",
+      `/channels/${this.channelId}/messages/${this.id}/forward`,
+      { body: { destination: destinationId, nonce: idempotencyKey } },
+    )) as { _id: string };
+
+    return this.#collection.client.messages.getOrCreate(
+      message._id,
+      message as never,
     );
   }
 

@@ -5,6 +5,10 @@ import type { Embed, Interactions, Masquerade, Message } from "stoat-api";
 import type { Client } from "../Client.js";
 import { File } from "../classes/File.js";
 import type {
+  ForwardedSnapshotData,
+  HydratedForwardedSnapshot,
+} from "../classes/ForwardedMessage.js";
+import type {
   ActionRowData,
   MessageInteractionData,
 } from "../classes/Interaction.js";
@@ -47,6 +51,12 @@ export type HydratedMessage = {
    */
   poll?: PollDefinitionData;
   /**
+   * Immutable forwarded-message snapshot (server-stamped by the forward
+   * route, which verified read access on the source; the regular
+   * send/edit paths have no such field, so it cannot be forged).
+   */
+  forwarded?: HydratedForwardedSnapshot;
+  /**
    * Local dynamic poll state (counts / closed / own ballot). NOT hydrated
    * from message wire data — stamped by fetchPoll / vote responses and the
    * PollVoteUpdate / PollClose events.
@@ -70,6 +80,7 @@ export const messageHydration: Hydrate<
     command_context?: MessageInteractionData;
     components?: ActionRowData[];
     poll?: PollDefinitionData;
+    forwarded?: ForwardedSnapshotData;
   },
   HydratedMessage
 > = {
@@ -85,6 +96,7 @@ export const messageHydration: Hydrate<
     command_context: "commandContext",
     components: "components",
     poll: "poll",
+    forwarded: "forwarded",
   },
   functions: {
     id: (message) => message._id,
@@ -130,6 +142,20 @@ export const messageHydration: Hydrate<
     commandContext: (message) => message.command_context,
     components: (message) => message.components,
     poll: (message) => message.poll,
+    forwarded: (message, ctx) =>
+      message.forwarded
+        ? {
+            messageId: message.forwarded.message_id,
+            channelId: message.forwarded.channel_id,
+            serverId: message.forwarded.server_id,
+            authorId: message.forwarded.author_id,
+            content: message.forwarded.content,
+            attachments: message.forwarded.attachments?.map(
+              (file) => new File(ctx as Client, file),
+            ),
+            originalSentAt: new Date(message.forwarded.original_sent_at),
+          }
+        : undefined,
     // Never from wire data — dynamic state lives in the polls routes and
     // the PollVoteUpdate/PollClose events, not on the message payload.
     pollState: () => undefined,

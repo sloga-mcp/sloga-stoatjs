@@ -12,6 +12,7 @@ import type { E2EEAdapter } from "./classes/E2EE.js";
 import type { Emoji } from "./classes/Emoji.js";
 import type { InteractionCreateEvent } from "./classes/Interaction.js";
 import type { Message } from "./classes/Message.js";
+import type { ScheduledMessageData } from "./classes/ScheduledMessage.js";
 import type { Server } from "./classes/Server.js";
 import type { ServerMember } from "./classes/ServerMember.js";
 import type { User } from "./classes/User.js";
@@ -130,6 +131,21 @@ export type Events = {
    */
   interactionEphemeral: [message: Message];
 
+  /** This user scheduled a message (private topic; author-only). */
+  scheduledMessageCreate: [row: ScheduledMessageData];
+
+  /**
+   * A pending scheduled message was cancelled (by this user elsewhere, or
+   * because its channel was deleted). Private topic; author-only.
+   */
+  scheduledMessageCancel: [id: string, channelId: string];
+
+  /**
+   * A scheduled message could not be delivered (permanent — permissions
+   * revoked, channel gone, or fire-time validation failed).
+   */
+  scheduledMessageFail: [id: string, channelId: string, reason: string];
+
   voiceChannelJoin: [channel: Channel, userId: string];
   voiceChannelLeave: [channel: Channel, userId: string];
 
@@ -228,6 +244,13 @@ export class Client extends AsyncEventEmitter<Events> {
   readonly sessions;
   readonly users;
   readonly userSlowmodes;
+  /**
+   * The current user's pending scheduled messages, keyed by row id.
+   * Author-private and ephemeral: populated by
+   * {@link Channel.fetchScheduledMessages} on channel mount and kept live
+   * by the `scheduledMessage*` events.
+   */
+  readonly scheduledMessages;
 
   readonly api: API;
   readonly options: ClientOptions;
@@ -330,6 +353,7 @@ export class Client extends AsyncEventEmitter<Events> {
     this.sessions = new SessionCollection(this);
     this.users = new UserCollection(this);
     this.userSlowmodes = new ReactiveMap<string, UserSlowmodes>();
+    this.scheduledMessages = new ReactiveMap<string, ScheduledMessageData>();
 
     this.events = new EventClient(1, "json", this.options);
     this.events.on("error", (error) => this.emit("error", error));

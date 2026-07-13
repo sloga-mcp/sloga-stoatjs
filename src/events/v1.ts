@@ -26,6 +26,7 @@ import type { E2EEClientMessage, E2EEServerEvent } from "../classes/E2EE.js";
 import type { InteractionCreateEvent } from "../classes/Interaction.js";
 import { MessageEmbed } from "../classes/MessageEmbed.js";
 import type { PollAnswerCountData } from "../classes/Poll.js";
+import type { ScheduledMessageData } from "../classes/ScheduledMessage.js";
 import { ServerRole } from "../classes/ServerRole.js";
 import type { ThreadChannelData } from "../classes/Thread.js";
 import { VoiceParticipant } from "../classes/VoiceParticipant.js";
@@ -252,6 +253,14 @@ type ServerMessage =
       counts: PollAnswerCountData[];
       total_votes: number;
     }
+  | { type: "MessageScheduled"; message: ScheduledMessageData }
+  | { type: "MessageScheduleCancelled"; id: string; channel: string }
+  | {
+      type: "ScheduledMessageFailed";
+      id: string;
+      channel: string;
+      reason: string;
+    }
   | E2EEServerEvent;
 
 /**
@@ -420,6 +429,14 @@ export async function handleEvent(
           delete event.user;
 
           client.messages.getOrCreate(event._id, event, true);
+
+          // A delivered scheduled message arrives as a normal Message
+          // whose nonce is the pending row's id (stamped by the delivery
+          // daemon) — reconcile the author's pending queue so the bar
+          // never offers a cancel for something already sent.
+          if (event.nonce && client.scheduledMessages.has(event.nonce)) {
+            client.scheduledMessages.delete(event.nonce);
+          }
 
           const channel = client.channels.get(event.channel);
           if (!channel) return;
@@ -1215,6 +1232,23 @@ export async function handleEvent(
           message,
         );
       }
+      break;
+    }
+    case "MessageScheduled": {
+      // Author-private (this user's own pending queue, another session may
+      // have scheduled it).
+      client.scheduledMessages.set(event.message._id, event.message);
+      client.emit("scheduledMessageCreate", event.message);
+      break;
+    }
+    case "MessageScheduleCancelled": {
+      client.scheduledMessages.delete(event.id);
+      client.emit("scheduledMessageCancel", event.id, event.channel);
+      break;
+    }
+    case "ScheduledMessageFailed": {
+      client.scheduledMessages.delete(event.id);
+      client.emit("scheduledMessageFail", event.id, event.channel, event.reason);
       break;
     }
     case "CalendarEventRsvp": {
