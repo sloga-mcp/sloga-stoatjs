@@ -254,6 +254,13 @@ type ServerMessage =
       counts: PollAnswerCountData[];
       total_votes: number;
     }
+  | {
+      type: "SoundboardSound";
+      id: string;
+      channel_id: string;
+      server_id: string;
+      emoji?: string;
+    }
   | { type: "MessageScheduled"; message: ScheduledMessageData }
   | { type: "MessageScheduleCancelled"; id: string; channel: string }
   | {
@@ -1241,6 +1248,18 @@ export async function handleEvent(
           message,
         );
       }
+      break;
+    }
+    case "SoundboardSound": {
+      // A soundboard sound was triggered in a voice call (channel topic).
+      // Transient — carries no audio, only the public sound id. Played
+      // locally by the voice store only if this client is in that call.
+      client.emit("soundboardSound", {
+        channelId: event.channel_id,
+        soundId: event.id,
+        serverId: event.server_id,
+        emoji: event.emoji,
+      });
       break;
     }
     case "MessageScheduled": {

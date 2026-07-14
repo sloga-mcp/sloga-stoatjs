@@ -147,8 +147,40 @@ export type Events = {
    */
   scheduledMessageFail: [id: string, channelId: string, reason: string];
 
+  /**
+   * A target channel started following an announcement channel (full follow;
+   * delivered on the target server topic).
+   */
+  channelFollowCreate: [follow: ChannelFollowData];
+
+  /** A follow was severed (target server topic). */
+  channelFollowDelete: [
+    ref: { id: string; sourceChannel: string; targetChannel: string },
+  ];
+
+  /**
+   * A source announcement channel's follower set changed — a privacy-trimmed
+   * refetch signal (source server topic; no target ids). Carries the source
+   * channel id so the followers UI can refetch the gated list.
+   */
+  channelFollowersUpdate: [channelId: string];
+
   voiceChannelJoin: [channel: Channel, userId: string];
   voiceChannelLeave: [channel: Channel, userId: string];
+
+  /**
+   * A soundboard sound was triggered in a voice call (channel topic).
+   * Carries only the public sound id — the voice store plays the clip
+   * locally if this client is currently in that call.
+   */
+  soundboardSound: [
+    detail: {
+      channelId: string;
+      soundId: string;
+      serverId: string;
+      emoji?: string;
+    },
+  ];
 
   userSlowmodes: [];
 

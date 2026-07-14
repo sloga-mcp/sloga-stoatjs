@@ -45,6 +45,11 @@ import type { User } from "./User.js";
 import { VoiceParticipant } from "./VoiceParticipant.js";
 
 /**
+ * Per-(channel, sound) last-trigger timestamps for the soundboard throttle.
+ */
+const soundboardThrottle = new Map<string, number>();
+
+/**
  * Channel Class
  */
 export class Channel {
@@ -1473,6 +1478,37 @@ export class Channel {
       // known route; stoat-api 0.13.5's `DataJoinCall` type predates the field,
       // so cast back to the pre-field body type to satisfy the compiler.
       (deviceId ? { ...body, device_id: deviceId } : body) as typeof body,
+    );
+  }
+
+  /**
+   * Trigger a server soundboard sound in this voice channel. Carries no
+   * audio — the server fans a `SoundboardSound` event to everyone in the
+   * call, who each play the clip locally. Requires being in the call and
+   * holding `UseSoundboard`. Raw fetch: the route is not in stoat-api's
+   * generated tables (mirrors the sticker/roll pattern), and it takes no
+   * body so the typed client's body-drop quirk is moot.
+   *
+   * A short client-side throttle per (channel, sound) avoids hammering the
+   * server rate-limit bucket from a mashed picker button — the server bucket
+   * is the real enforcement.
+   * @param soundId Soundboard sound id
+   */
+  async triggerSound(soundId: string): Promise<void> {
+    const key = `${this.id}:${soundId}`;
+    const now = Date.now();
+    const last = soundboardThrottle.get(key) ?? 0;
+    if (now - last < 400) return;
+    soundboardThrottle.set(key, now);
+
+    const client = this.#collection.client;
+    const [headerKey, headerValue] = client.authenticationHeader;
+    await fetch(
+      `${client.options.baseURL}/channels/${this.id}/soundboard/${soundId}`,
+      {
+        method: "POST",
+        headers: { [headerKey]: headerValue },
+      },
     );
   }
 

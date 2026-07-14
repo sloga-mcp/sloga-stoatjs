@@ -85,6 +85,8 @@ export const Permission = {
   MoveMembers: 2n ** 35n,
   /// Move members between voice channels
   Listen: 2n ** 36n,
+  /// Use the server soundboard in a voice call
+  UseSoundboard: 2n ** 40n,
 
   // * Mention permissions
   /// Mention @everyone or @online
@@ -130,7 +132,8 @@ export const DEFAULT_PERMISSION =
   Permission.Connect +
   Permission.Speak +
   Permission.Video +
-  Permission.Listen;
+  Permission.Listen +
+  Permission.UseSoundboard;
 
 /**
  * Permissions in saved messages channel
