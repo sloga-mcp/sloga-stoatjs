@@ -14,6 +14,7 @@ import type { MessageCollection } from "../collections/MessageCollection.js";
 import { MessageFlags, messageFlagAtPosition } from "../hydration/message.js";
 
 import type { Channel } from "./Channel.js";
+import type { CrosspostInfoData } from "./ChannelFollow.js";
 import { File } from "./File.js";
 import type { HydratedForwardedSnapshot } from "./ForwardedMessage.js";
 import type {
@@ -484,6 +485,40 @@ export class Message {
    */
   get isForwarded(): boolean {
     return this.forwarded !== undefined;
+  }
+
+  /**
+   * Whether this (origin) message has been published from an announcement
+   * channel (the Crossposted flag is a server-only bit position).
+   */
+  get isCrossposted(): boolean {
+    return messageFlagAtPosition(this.flags, MessageFlags.Crossposted);
+  }
+
+  /**
+   * Whether this message is a delivered crosspost copy (the IsCrosspost flag
+   * is a server-only bit position; pairs with {@link crosspost}).
+   */
+  get isCrosspost(): boolean {
+    return messageFlagAtPosition(this.flags, MessageFlags.IsCrosspost);
+  }
+
+  /**
+   * Server-set origin attribution on a delivered crosspost copy (points at
+   * the origin announcement message / channel / server). Unforgeable — never
+   * client-settable.
+   */
+  get crosspost(): CrosspostInfoData | undefined {
+    return this.#collection.getUnderlyingObject(this.id).crosspost;
+  }
+
+  /**
+   * Publish (crosspost) this message from its announcement channel into every
+   * follower channel. Requires `SendMessage` (+ `ManageMessages` for others'
+   * messages). The `Crossposted` flag flips via the resulting MessageUpdate.
+   */
+  async publish(): Promise<void> {
+    await this.channel?.crosspostMessage(this.id);
   }
 
   /**

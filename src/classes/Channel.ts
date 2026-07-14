@@ -36,6 +36,7 @@ import type {
   ForumSortOrder,
   ForumTag,
 } from "./Forum.js";
+import type { ChannelFollowData } from "./ChannelFollow.js";
 import type { ApplicationCommandData } from "./Interaction.js";
 import type { DataPollCreate } from "./Poll.js";
 import type { ScheduledMessageData } from "./ScheduledMessage.js";
@@ -1369,6 +1370,77 @@ export class Channel {
    */
   get slowmode(): number {
     return this.#collection.getUnderlyingObject(this.id).slowmode ?? 0;
+  }
+
+  /**
+   * Whether this is a server text channel flagged as an announcement channel
+   * (other servers' channels can follow it, and its messages can be
+   * published / crossposted).
+   */
+  get isAnnouncement(): boolean {
+    return (
+      this.type === "TextChannel" &&
+      this.#collection.getUnderlyingObject(this.id).announcement
+    );
+  }
+
+  /**
+   * Follow this announcement channel from a target channel in another server.
+   * @param serverId Id of the server that owns the target channel
+   * @param channelId Id of the target (follower) channel
+   * @requires `ViewChannel` here, `ManageWebhooks` on the target
+   * @returns The created follow
+   */
+  async follow(
+    serverId: string,
+    channelId: string,
+  ): Promise<ChannelFollowData> {
+    return (await this.#collection.apiReq(
+      "POST",
+      `/channels/${this.id}/follow`,
+      {
+        body: {
+          server: serverId,
+          channel: channelId,
+        },
+      },
+    )) as ChannelFollowData;
+  }
+
+  /**
+   * Sever a follow of this announcement channel.
+   * @param followId Id of the follow to remove
+   * @requires `ManageChannel` here OR `ManageWebhooks` on the target
+   */
+  async unfollow(followId: string): Promise<void> {
+    await this.#collection.apiReq(
+      "DELETE",
+      `/channels/${this.id}/follow/${followId}`,
+    );
+  }
+
+  /**
+   * Fetch the follows hanging off this announcement channel.
+   * @requires `ManageChannel`
+   */
+  async fetchFollowers(): Promise<ChannelFollowData[]> {
+    return (await this.#collection.apiReq(
+      "GET",
+      `/channels/${this.id}/followers`,
+    )) as ChannelFollowData[];
+  }
+
+  /**
+   * Publish (crosspost) a message from this announcement channel into every
+   * follower channel.
+   * @param messageId Id of the message to publish
+   * @requires `SendMessage` (+ `ManageMessages` for others' messages)
+   */
+  async crosspostMessage(messageId: string): Promise<void> {
+    await this.#collection.apiReq(
+      "POST",
+      `/channels/${this.id}/messages/${messageId}/crosspost`,
+    );
   }
 
   /**

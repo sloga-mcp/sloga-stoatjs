@@ -8,6 +8,7 @@ import type { DataLogin, RevoltConfig, Role } from "stoat-api";
 
 import type { CalendarEvent, EventRsvpData } from "./classes/CalendarEvent.js";
 import type { Channel } from "./classes/Channel.js";
+import type { ChannelFollowData } from "./classes/ChannelFollow.js";
 import type { E2EEAdapter } from "./classes/E2EE.js";
 import type { Emoji } from "./classes/Emoji.js";
 import type { InteractionCreateEvent } from "./classes/Interaction.js";

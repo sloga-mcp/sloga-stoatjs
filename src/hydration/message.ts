@@ -3,6 +3,7 @@ import { ReactiveSet } from "@solid-primitives/set";
 import type { Embed, Interactions, Masquerade, Message } from "stoat-api";
 
 import type { Client } from "../Client.js";
+import type { CrosspostInfoData } from "../classes/ChannelFollow.js";
 import { File } from "../classes/File.js";
 import type {
   ForwardedSnapshotData,
@@ -57,6 +58,12 @@ export type HydratedMessage = {
    */
   forwarded?: HydratedForwardedSnapshot;
   /**
+   * Server-set origin attribution on a delivered crosspost copy (present
+   * with the `IsCrosspost` flag). Never client-sent, so the "From {server}
+   * #{channel}" line always derives from authoritative ids.
+   */
+  crosspost?: CrosspostInfoData;
+  /**
    * Local dynamic poll state (counts / closed / own ballot). NOT hydrated
    * from message wire data — stamped by fetchPoll / vote responses and the
    * PollVoteUpdate / PollClose events.
@@ -81,6 +88,7 @@ export const messageHydration: Hydrate<
     components?: ActionRowData[];
     poll?: PollDefinitionData;
     forwarded?: ForwardedSnapshotData;
+    crosspost?: CrosspostInfoData;
   },
   HydratedMessage
 > = {
@@ -97,6 +105,7 @@ export const messageHydration: Hydrate<
     components: "components",
     poll: "poll",
     forwarded: "forwarded",
+    crosspost: "crosspost",
   },
   functions: {
     id: (message) => message._id,
@@ -156,6 +165,7 @@ export const messageHydration: Hydrate<
             originalSentAt: new Date(message.forwarded.original_sent_at),
           }
         : undefined,
+    crosspost: (message) => message.crosspost,
     // Never from wire data — dynamic state lives in the polls routes and
     // the PollVoteUpdate/PollClose events, not on the message payload.
     pollState: () => undefined,
@@ -193,6 +203,20 @@ export enum MessageFlags {
    * the "used /cmd" attribution. Test via {@link messageFlagAtPosition}.
    */
   Interaction = 5,
+  /**
+   * This origin message has been published (crossposted) from an
+   * announcement channel — a bit POSITION (server `MessageFlags::Crossposted
+   * = 7`), NOT a mask. Server-set only (send path rejects client flags above
+   * 7), so the "Published" state cannot be forged. Test via
+   * {@link messageFlagAtPosition}.
+   */
+  Crossposted = 7,
+  /**
+   * This message is a delivered crosspost copy (carries `crosspost`
+   * attribution) — a bit POSITION (server `MessageFlags::IsCrosspost = 8`),
+   * NOT a mask. Server-set only. Test via {@link messageFlagAtPosition}.
+   */
+  IsCrosspost = 8,
   /**
    * CLIENT-ASSIGNED, never sent to or received from the server: this
    * message was end-to-end encrypted and lives only in the device-local

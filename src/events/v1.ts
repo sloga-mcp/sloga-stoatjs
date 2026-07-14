@@ -22,6 +22,7 @@ import type {
 
 import type { Client } from "../Client.js";
 import type { EventData, EventRsvpData } from "../classes/CalendarEvent.js";
+import type { ChannelFollowData } from "../classes/ChannelFollow.js";
 import type { E2EEClientMessage, E2EEServerEvent } from "../classes/E2EE.js";
 import type { InteractionCreateEvent } from "../classes/Interaction.js";
 import { MessageEmbed } from "../classes/MessageEmbed.js";
@@ -261,6 +262,14 @@ type ServerMessage =
       channel: string;
       reason: string;
     }
+  | { type: "ChannelFollowCreate"; follow: ChannelFollowData }
+  | {
+      type: "ChannelFollowDelete";
+      id: string;
+      source_channel: string;
+      target_channel: string;
+    }
+  | { type: "ChannelFollowersUpdate"; channel: string }
   | E2EEServerEvent;
 
 /**
@@ -1249,6 +1258,26 @@ export async function handleEvent(
     case "ScheduledMessageFailed": {
       client.scheduledMessages.delete(event.id);
       client.emit("scheduledMessageFail", event.id, event.channel, event.reason);
+      break;
+    }
+    case "ChannelFollowCreate": {
+      // Received on the TARGET server topic (full follow). No dedicated
+      // collection — emitted straight through for any interested UI.
+      client.emit("channelFollowCreate", event.follow);
+      break;
+    }
+    case "ChannelFollowDelete": {
+      client.emit("channelFollowDelete", {
+        id: event.id,
+        sourceChannel: event.source_channel,
+        targetChannel: event.target_channel,
+      });
+      break;
+    }
+    case "ChannelFollowersUpdate": {
+      // Privacy-trimmed refetch signal on the SOURCE server topic — the
+      // source-side followers UI refetches the ManageChannel-gated list.
+      client.emit("channelFollowersUpdate", event.channel);
       break;
     }
     case "CalendarEventRsvp": {

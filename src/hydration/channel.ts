@@ -36,6 +36,8 @@ export type HydratedChannel = {
   rolePermissions?: Record<string, { a: bigint; d: bigint }>;
   nsfw: boolean;
   slowmode: number;
+  /** Whether this text channel is an announcement channel (crosspost source) */
+  announcement: boolean;
 
   lastMessageId?: string;
 
@@ -59,7 +61,10 @@ export type HydratedChannel = {
 };
 
 export const channelHydration: Hydrate<
-  Merge<APIChannel | ThreadChannelData | ForumChannelData>,
+  // `announcement` is additive; stoat-api 0.13.5 predates it.
+  Merge<APIChannel | ThreadChannelData | ForumChannelData> & {
+    announcement?: boolean;
+  },
   HydratedChannel
 > = {
   keyMapping: {
@@ -73,6 +78,7 @@ export const channelHydration: Hydrate<
     role_permissions: "rolePermissions",
     last_message_id: "lastMessageId",
     slowmode: "slowmode",
+    announcement: "announcement",
     parent_channel: "parentChannelId",
     origin_message_id: "originMessageId",
     creator: "creatorId",
@@ -113,6 +119,7 @@ export const channelHydration: Hydrate<
     nsfw: (channel) => channel.nsfw || false,
     lastMessageId: (channel) => channel.last_message_id!,
     slowmode: (channel) => channel.slowmode ?? 0,
+    announcement: (channel) => channel.announcement ?? false,
     voice: (channel) =>
       !!channel.voice ||
       channel.channel_type === "DirectMessage" ||
@@ -142,5 +149,6 @@ export const channelHydration: Hydrate<
     archived: false,
     locked: false,
     requireTag: false,
+    announcement: false,
   }),
 };
