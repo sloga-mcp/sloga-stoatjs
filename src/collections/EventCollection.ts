@@ -32,6 +32,7 @@ const OPTIONAL_KEYS = [
   "end",
   "recurrence",
   "color",
+  "attachments",
   "editedAt",
 ] as const;
 

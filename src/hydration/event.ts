@@ -1,9 +1,11 @@
+import type { Client } from "../Client.js";
 import type {
   AttendeeCounts,
   EventData,
   RecurrenceRuleData,
   RsvpStatus,
 } from "../classes/CalendarEvent.js";
+import { File } from "../classes/File.js";
 
 import type { Hydrate } from "./index.js";
 
@@ -30,6 +32,7 @@ export type HydratedEvent = {
   recurrence?: RecurrenceRuleData;
   color?: string;
   cancelled: boolean;
+  attachments?: File[];
   createdAt: number;
   editedAt?: number;
   myRsvp?: RsvpStatus;
@@ -52,6 +55,7 @@ export const eventHydration: Hydrate<EventData, HydratedEvent> = {
     recurrence: "recurrence",
     color: "color",
     cancelled: "cancelled",
+    attachments: "attachments",
     created_at: "createdAt",
     edited_at: "editedAt",
   },
@@ -70,6 +74,8 @@ export const eventHydration: Hydrate<EventData, HydratedEvent> = {
     recurrence: (event) => event.recurrence,
     color: (event) => event.color,
     cancelled: (event) => event.cancelled,
+    attachments: (event, ctx) =>
+      event.attachments?.map((file) => new File(ctx as Client, file)),
     createdAt: (event) => event.created_at,
     editedAt: (event) => event.edited_at,
     // Never hydrated (no wire key); present only to satisfy the mapping type.

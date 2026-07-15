@@ -1,6 +1,9 @@
+import type { File as APIFile } from "stoat-api";
+
 import type { EventCollection } from "../collections/EventCollection.js";
 
 import type { Channel } from "./Channel.js";
+import type { File } from "./File.js";
 import type { Server } from "./Server.js";
 
 // ----- Wire types -------------------------------------------------------------
@@ -50,6 +53,8 @@ export interface EventData {
   recurrence?: RecurrenceRuleData;
   color?: string;
   cancelled: boolean;
+  /** Files attached to the event; visible to anyone who can view the event. */
+  attachments?: APIFile[];
   created_at: number;
   edited_at?: number;
 }
@@ -94,7 +99,8 @@ export type FieldsEvent =
   | "Location"
   | "End"
   | "Recurrence"
-  | "Color";
+  | "Color"
+  | "Attachments";
 
 /** `POST /events/server/<id>` body. */
 export interface DataCreateEvent {
@@ -108,6 +114,8 @@ export interface DataCreateEvent {
   recurrence?: RecurrenceRuleData;
   color?: string;
   channel?: string;
+  /** Attachment file ids (uploaded to the `attachments` bucket, claimed server-side). */
+  attachments?: string[];
 }
 
 /** `PATCH /events/event/<id>` body. */
@@ -121,6 +129,10 @@ export interface DataEditEvent {
   timezone?: string;
   recurrence?: RecurrenceRuleData;
   color?: string;
+  /** Attachment file ids to ADD (uploaded to the `attachments` bucket). */
+  attachments?: string[];
+  /** Attachment file ids to DETACH (the files are marked deleted server-side). */
+  remove_attachments?: string[];
   remove?: FieldsEvent[];
 }
 
@@ -236,6 +248,11 @@ export class CalendarEvent {
 
   get cancelled(): boolean {
     return this.#collection.getUnderlyingObject(this.id).cancelled;
+  }
+
+  /** Files attached to the event (visible to anyone who can view the event). */
+  get attachments(): File[] | undefined {
+    return this.#collection.getUnderlyingObject(this.id).attachments;
   }
 
   get createdAt(): Date {
