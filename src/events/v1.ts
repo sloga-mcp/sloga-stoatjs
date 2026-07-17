@@ -1018,17 +1018,27 @@ export async function handleEvent(
       break;
     }
     case "UserRelationship": {
-      handleEvent(
-        client,
-        {
-          type: "UserUpdate",
-          id: event.user._id,
-          data: {
-            relationship: event.user.relationship!,
+      if (
+        client.users.has(event.user._id) &&
+        !client.users.isPartial(event.user._id)
+      ) {
+        handleEvent(
+          client,
+          {
+            type: "UserUpdate",
+            id: event.user._id,
+            data: {
+              relationship: event.user.relationship!,
+            },
           },
-        },
-        setReady,
-      );
+          setReady,
+        );
+      } else {
+        // The event carries the full user; insert it so relationships with
+        // users we haven't cached (e.g. a friend request from a stranger)
+        // show up without a reload.
+        client.users.getOrCreate(event.user._id, event.user);
+      }
       break;
     }
     case "UserPresence": {
