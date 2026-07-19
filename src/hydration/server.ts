@@ -32,16 +32,22 @@ export type HydratedServer = {
   flags: ServerFlags;
   analytics: boolean;
   discoverable: boolean;
+  discoveryRequested: boolean;
   nsfw: boolean;
 };
 
-export const serverHydration: Hydrate<APIServer, HydratedServer> = {
+export const serverHydration: Hydrate<
+  // `discovery_requested` is additive; stoat-api predates it.
+  APIServer & { discovery_requested?: boolean },
+  HydratedServer
+> = {
   keyMapping: {
     _id: "id",
     owner: "ownerId",
     channels: "channelIds",
     system_messages: "systemMessages",
     default_permissions: "defaultPermissions",
+    discovery_requested: "discoveryRequested",
   },
   functions: {
     id: (server) => server._id,
@@ -64,6 +70,7 @@ export const serverHydration: Hydrate<APIServer, HydratedServer> = {
     flags: (server) => server.flags!,
     analytics: (server) => server.analytics || false,
     discoverable: (server) => server.discoverable || false,
+    discoveryRequested: (server) => server.discovery_requested || false,
     nsfw: (server) => server.nsfw || false,
   },
   initialHydration: () => ({

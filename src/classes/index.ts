@@ -16,6 +16,7 @@ export * from "./MessageEmbed.js";
 export * from "./Poll.js";
 export * from "./PublicBot.js";
 export * from "./ScheduledMessage.js";
+export * from "./DiscoverableServer.js";
 export * from "./PublicInvite.js";
 export * from "./ServerRole.js";
 export * from "./Server.js";

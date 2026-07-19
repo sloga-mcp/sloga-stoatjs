@@ -194,6 +194,14 @@ export class Server {
   }
 
   /**
+   * Whether the owner has requested a public discovery listing
+   * (pending until a platform admin approves)
+   */
+  get discoveryRequested(): boolean {
+    return this.#collection.getUnderlyingObject(this.id).discoveryRequested;
+  }
+
+  /**
    * Whether this server is marked as mature
    */
   get mature(): boolean {
