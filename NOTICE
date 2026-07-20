@@ -1,0 +1,13 @@
+Sloga — client library (stoat.js)
+Copyright (C) Sloga Technologies LLC and the Sloga contributors.
+
+This library is a modified version of stoat.js
+(https://github.com/stoatchat/javascript-client-sdk), which is derived from
+revolt.js (https://github.com/revoltchat). Portions are Copyright (C) the Stoat
+and Revolt contributors.
+
+LICENSE
+-------
+This library is distributed under the MIT License. See the LICENSE file for the
+full text. The MIT License requires that the copyright notice and permission
+notice be preserved in copies and substantial portions of the software.
