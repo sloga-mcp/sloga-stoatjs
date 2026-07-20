@@ -11,11 +11,30 @@ import { File } from "../classes/File.js";
 import type { Hydrate } from "./index.js";
 
 /**
+ * A linked streaming channel (Twitch / YouTube), public by design.
+ * Newer than the published stoat-api types.
+ */
+export type UserConnection = {
+  platform: "Twitch" | "YouTube";
+  handle: string;
+  display_name: string;
+  /** Serialized only when true */
+  live?: boolean;
+  live_title?: string;
+  live_since?: string;
+};
+
+/**
  * `e2ee_enabled` is newer than the published stoat-api types. It is a UI /
  * discovery hint ONLY (invariant 2) — actual E2EE capability always derives
  * from a fetched, signature-verified key bundle, never from this flag.
+ * `connections` (linked streaming channels) is likewise newer than the
+ * published types; absent = none.
  */
-type APIUserExt = APIUser & { e2ee_enabled?: boolean };
+type APIUserExt = APIUser & {
+  e2ee_enabled?: boolean;
+  connections?: UserConnection[];
+};
 
 export type HydratedUser = {
   id: string;
@@ -37,6 +56,7 @@ export type HydratedUser = {
     activity?: { name: string; started_at?: string } | null;
   };
   bot?: BotInformation;
+  connections: UserConnection[];
 };
 
 export const userHydration: Hydrate<APIUserExt, HydratedUser> = {
@@ -64,10 +84,13 @@ export const userHydration: Hydrate<APIUserExt, HydratedUser> = {
     avatar: (user, ctx) => new File(ctx as Client, user.avatar!),
     status: (user) => user.status!,
     bot: (user) => user.bot!,
+    // Serialized only when non-empty, so absence = none
+    connections: (user) => user.connections ?? [],
   },
   initialHydration: () => ({
     relationship: "None",
     e2eeEnabled: false,
+    connections: [],
   }),
 };
 

@@ -3,6 +3,7 @@ import { decodeTime } from "ulid";
 
 import type { UserCollection } from "../collections/UserCollection.js";
 import { hydrate } from "../hydration/index.js";
+import type { UserConnection } from "../hydration/user.js";
 import { U32_MAX, UserPermission } from "../permissions/definitions.js";
 
 import type { Channel } from "./Channel.js";
@@ -119,6 +120,20 @@ export class User {
    */
   get activity(): { name: string; started_at?: string } | undefined {
     return (this.online && this.status?.activity) || undefined;
+  }
+
+  /**
+   * Linked streaming channels (Twitch / YouTube)
+   */
+  get connections(): UserConnection[] {
+    return this.#collection.getUnderlyingObject(this.id).connections ?? [];
+  }
+
+  /**
+   * Linked streaming channels that are currently live
+   */
+  get liveConnections(): UserConnection[] {
+    return this.connections.filter((connection) => connection.live);
   }
 
   /**

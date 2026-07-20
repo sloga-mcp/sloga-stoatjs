@@ -1008,6 +1008,9 @@ export async function handleEvent(
                   activity: undefined,
                 };
                 break;
+              case "Connections":
+                changes["connections"] = [];
+                break;
             }
           }
         }
