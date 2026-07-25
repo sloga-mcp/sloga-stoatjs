@@ -9,6 +9,7 @@ import type { DataLogin, RevoltConfig, Role } from "stoat-api";
 import type { CalendarEvent, EventRsvpData } from "./classes/CalendarEvent.js";
 import type { Channel } from "./classes/Channel.js";
 import type { ChannelFollowData } from "./classes/ChannelFollow.js";
+import type { DiscordImportJobData } from "./classes/DiscordImport.js";
 import type { E2EEAdapter } from "./classes/E2EE.js";
 import type { Emoji } from "./classes/Emoji.js";
 import type { InteractionCreateEvent } from "./classes/Interaction.js";
@@ -183,6 +184,25 @@ export type Events = {
   ];
 
   userSlowmodes: [];
+
+  /**
+   * A Discord import advanced a stage (private topic; owner-only).
+   *
+   * `stage` is an OPAQUE server string — never switch on it exhaustively.
+   * `total` is legitimately `0` while a stage is indeterminate, so guard
+   * before dividing.
+   */
+  discordImportProgress: [
+    progress: { jobId: string; stage: string; done: number; total: number },
+  ];
+
+  /** A Discord import finished; the server exists and the invite is live. */
+  discordImportComplete: [
+    result: { jobId: string; serverId: string; inviteCode: string },
+  ];
+
+  /** A Discord import failed permanently; `error` is already user-safe. */
+  discordImportFailed: [failure: { jobId: string; error: string }];
 
   reportCreate: [
     report: {
@@ -717,5 +737,95 @@ export class Client extends AsyncEventEmitter<Events> {
     }, data.retry_after * 1000);
 
     this.#slowmodeTimers.set(channelId, timer);
+  }
+
+  /**
+   * Start a "Import from Discord" job from a pasted guild-template link or
+   * bare template code. The server parses it; anything unparseable comes back
+   * as an `InvalidOperation` error.
+   *
+   * Rejects with the **parsed API error body** (see {@link Client.#apiReq}) —
+   * notably `ImportAlreadyInProgress` (one job per user at a time),
+   * `TooManyServers` (server quota) and `OperationFailed` (feature disabled).
+   * @param template Pasted link or code
+   * @returns The new job's id
+   */
+  async importDiscordTemplate(template: string): Promise<{ job_id: string }> {
+    return (await this.#apiReq("POST", "/import/discord/template", {
+      template,
+    })) as { job_id: string };
+  }
+
+  /**
+   * Fetch one import job by id. Owner-scoped — 404 for anyone else.
+   *
+   * The reconnect-safe fallback for missed `discordImport*` events; poll this
+   * while a job runs and stop the moment its status is terminal.
+   * @param id Job id
+   */
+  async fetchDiscordImportJob(id: string): Promise<DiscordImportJobData> {
+    return (await this.#apiReq(
+      "GET",
+      `/import/discord/jobs/${id}`,
+    )) as DiscordImportJobData;
+  }
+
+  /**
+   * Fetch the caller's `Queued`/`Running` import job, if any.
+   *
+   * Resolves to `null` when nothing is in flight — including when a job has
+   * already finished, so a client that needs to recover a *completed* job's
+   * invite must remember its id and use {@link fetchDiscordImportJob}.
+   */
+  async fetchActiveDiscordImportJob(): Promise<DiscordImportJobData | null> {
+    return (await this.#apiReq(
+      "GET",
+      "/import/discord/active",
+    )) as DiscordImportJobData | null;
+  }
+
+  /**
+   * Raw request against a custom `/import` route.
+   *
+   * stoat-api's typed client silently drops the body of routes missing from
+   * its generated tables (they arrive as `{}` and Rocket 422s), so these go
+   * through `fetch` — the same pattern as `EventCollection.apiReq` and
+   * `ChannelCollection.apiReq`.
+   *
+   * On a non-2xx this **throws the parsed JSON error body**, not an `Error`,
+   * and the HTTP status is not preserved: callers branch on `error?.type`.
+   */
+  async #apiReq(
+    method: string,
+    path: string,
+    body?: unknown,
+  ): Promise<unknown> {
+    const api = this.api as unknown as {
+      baseURL: string;
+      auth: Record<string, string>;
+    };
+
+    const response = await fetch(api.baseURL + path, {
+      method,
+      headers: {
+        ...api.auth,
+        ...(body ? { "Content-Type": "application/json" } : {}),
+      },
+      body: body ? JSON.stringify(body) : undefined,
+    });
+
+    if (!response.ok) {
+      const text = await response.text();
+      // Surface the typed error object when the body is JSON, else the raw text.
+      let error: unknown = text;
+      try {
+        error = JSON.parse(text);
+      } catch {
+        /* keep the raw text */
+      }
+      throw error;
+    }
+
+    return response.status === 204 ? null : response.json();
   }
 }

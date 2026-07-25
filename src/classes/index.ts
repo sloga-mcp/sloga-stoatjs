@@ -4,6 +4,7 @@ export * from "./CalendarEvent.js";
 export * from "./Channel.js";
 export * from "./ChannelUnread.js";
 export * from "./ChannelWebhook.js";
+export * from "./DiscordImport.js";
 export * from "./E2EE.js";
 export * from "./Emoji.js";
 export * from "./File.js";

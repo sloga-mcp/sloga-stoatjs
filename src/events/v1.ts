@@ -277,6 +277,22 @@ type ServerMessage =
       target_channel: string;
     }
   | { type: "ChannelFollowersUpdate"; channel: string }
+  | {
+      type: "DiscordImportProgress";
+      job_id: string;
+      /** Opaque server stage string — later slices add values */
+      stage: string;
+      done: number;
+      /** May legitimately be 0 while the stage is indeterminate */
+      total: number;
+    }
+  | {
+      type: "DiscordImportComplete";
+      job_id: string;
+      server_id: string;
+      invite_code: string;
+    }
+  | { type: "DiscordImportFailed"; job_id: string; error: string }
   | E2EEServerEvent;
 
 /**
@@ -1310,6 +1326,35 @@ export async function handleEvent(
       // Privacy-trimmed refetch signal on the SOURCE server topic — the
       // source-side followers UI refetches the ManageChannel-gated list.
       client.emit("channelFollowersUpdate", event.channel);
+      break;
+    }
+    // "Import from Discord" job progress, delivered on the initiating user's
+    // private topic. No collection — the app-level import worker owns the
+    // state (the modal may be dismissed while the job runs).
+    case "DiscordImportProgress": {
+      client.emit("discordImportProgress", {
+        jobId: event.job_id,
+        stage: event.stage,
+        done: event.done,
+        total: event.total,
+      });
+      break;
+    }
+    case "DiscordImportComplete": {
+      // `ServerCreate` is emitted by the worker BEFORE this, so the server
+      // collection is already hydrated by the time we navigate to it.
+      client.emit("discordImportComplete", {
+        jobId: event.job_id,
+        serverId: event.server_id,
+        inviteCode: event.invite_code,
+      });
+      break;
+    }
+    case "DiscordImportFailed": {
+      client.emit("discordImportFailed", {
+        jobId: event.job_id,
+        error: event.error,
+      });
       break;
     }
     case "CalendarEventRsvp": {
