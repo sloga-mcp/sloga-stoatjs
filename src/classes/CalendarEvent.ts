@@ -5,6 +5,7 @@ import type { EventCollection } from "../collections/EventCollection.js";
 import type { Channel } from "./Channel.js";
 import type { File } from "./File.js";
 import type { Server } from "./Server.js";
+import type { SoftResData } from "./SoftRes.js";
 
 // ----- Wire types -------------------------------------------------------------
 // stoat-api (upstream-generated) has no calendar types, so we declare the wire
@@ -409,5 +410,15 @@ export class CalendarEvent {
       { query: params },
     )) as AttendeesResponse;
     return response.attendees;
+  }
+
+  /**
+   * Fetch the soft-reserve sheet linked to this event, if any. Resolves
+   * to `null` when the event has no sheet or the sheet's channel is not
+   * visible to this user (both 404 server-side — no existence oracle).
+   * A sheet linked to a cancelled event still resolves (locked).
+   */
+  fetchSoftRes(): Promise<SoftResData | null> {
+    return this.#collection.client.fetchEventSoftRes(this.id);
   }
 }

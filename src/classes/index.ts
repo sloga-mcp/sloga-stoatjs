@@ -24,6 +24,7 @@ export * from "./Server.js";
 export * from "./ServerBan.js";
 export * from "./ServerMember.js";
 export * from "./Session.js";
+export * from "./SoftRes.js";
 export * from "./SystemMessage.js";
 export * from "./Thread.js";
 export * from "./User.js";

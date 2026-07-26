@@ -16,6 +16,10 @@ import type {
 import { MessageWebhook } from "../classes/Message.js";
 import { MessageEmbed } from "../classes/MessageEmbed.js";
 import type { PollDefinitionData, PollState } from "../classes/Poll.js";
+import type {
+  SoftResDefinitionData,
+  SoftResState,
+} from "../classes/SoftRes.js";
 import { SystemMessage } from "../classes/SystemMessage.js";
 import type { Merge } from "../lib/merge.js";
 
@@ -52,6 +56,13 @@ export type HydratedMessage = {
    */
   poll?: PollDefinitionData;
   /**
+   * Immutable soft-reserve sheet definition (server-stamped by the
+   * softres create route, never client-sent — the regular send path has
+   * no softres field). Creation-time snapshot for cold render only;
+   * settings edits leave it stale by design, hydrated state wins.
+   */
+  softres?: SoftResDefinitionData;
+  /**
    * Immutable forwarded-message snapshot (server-stamped by the forward
    * route, which verified read access on the source; the regular
    * send/edit paths have no such field, so it cannot be forged).
@@ -70,6 +81,12 @@ export type HydratedMessage = {
    */
   pollState?: PollState;
   /**
+   * Local dynamic soft-reserve state (reserves / counts / lock). NOT
+   * hydrated from message wire data — stamped by fetchSoftRes / reserve
+   * responses and the SoftresReserveUpdate / SoftresSheetUpdate events.
+   */
+  softresState?: SoftResState;
+  /**
    * Local marker: ephemeral interaction response (delivered only to this
    * user, never persisted). Deliberately NOT hydrated from wire data — the
    * InteractionEphemeralMessage event handler stamps it directly onto the
@@ -87,6 +104,7 @@ export const messageHydration: Hydrate<
     command_context?: MessageInteractionData;
     components?: ActionRowData[];
     poll?: PollDefinitionData;
+    softres?: SoftResDefinitionData;
     forwarded?: ForwardedSnapshotData;
     crosspost?: CrosspostInfoData;
   },
@@ -104,6 +122,7 @@ export const messageHydration: Hydrate<
     command_context: "commandContext",
     components: "components",
     poll: "poll",
+    softres: "softres",
     forwarded: "forwarded",
     crosspost: "crosspost",
   },
@@ -151,6 +170,7 @@ export const messageHydration: Hydrate<
     commandContext: (message) => message.command_context,
     components: (message) => message.components,
     poll: (message) => message.poll,
+    softres: (message) => message.softres,
     forwarded: (message, ctx) =>
       message.forwarded
         ? {
@@ -169,6 +189,9 @@ export const messageHydration: Hydrate<
     // Never from wire data — dynamic state lives in the polls routes and
     // the PollVoteUpdate/PollClose events, not on the message payload.
     pollState: () => undefined,
+    // Never from wire data — dynamic state lives in the softres routes
+    // and the SoftresReserveUpdate/SoftresSheetUpdate events.
+    softresState: () => undefined,
     // Deliberately ignores wire data (a hostile server must not be able to
     // stamp persisted messages "ephemeral"); the
     // InteractionEphemeralMessage handler sets the flag directly.

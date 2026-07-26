@@ -27,6 +27,11 @@ import type { E2EEClientMessage, E2EEServerEvent } from "../classes/E2EE.js";
 import type { InteractionCreateEvent } from "../classes/Interaction.js";
 import { MessageEmbed } from "../classes/MessageEmbed.js";
 import type { PollAnswerCountData } from "../classes/Poll.js";
+import {
+  softresStateFromWire,
+  type SoftResData,
+  type SoftResReserveData,
+} from "../classes/SoftRes.js";
 import type { ScheduledMessageData } from "../classes/ScheduledMessage.js";
 import { ServerRole } from "../classes/ServerRole.js";
 import type { ThreadChannelData } from "../classes/Thread.js";
@@ -253,6 +258,35 @@ type ServerMessage =
       message_id: string;
       counts: PollAnswerCountData[];
       total_votes: number;
+    }
+  | {
+      type: "SoftresReserveUpdate";
+      id: string;
+      channel_id: string;
+      message_id: string;
+      total_reserves: number;
+      /**
+       * New counts for the CHANGED items only (a delta, not the full
+       * map); an item retracted to zero arrives as an explicit 0. Absent
+       * on hidden sheets.
+       */
+      changed_item_counts?: Record<string, number>;
+      /** The set/replaced row. Absent on hidden sheets and on retract. */
+      reserve?: SoftResReserveData;
+      /** The retracting user's id. Absent on hidden sheets and on set. */
+      removed_user?: string;
+    }
+  | {
+      type: "SoftresSheetUpdate";
+      id: string;
+      channel_id: string;
+      message_id: string;
+      /**
+       * The PUBLIC-gated model (no viewer: `my_reserve` never populated;
+       * reserves / item_counts absent when hidden, even for the leader,
+       * who refetches over REST).
+       */
+      sheet: SoftResData;
     }
   | {
       type: "SoundboardSound";
@@ -1276,6 +1310,117 @@ export async function handleEvent(
           event.type === "PollClose" ? "pollClose" : "pollVoteUpdate",
           message,
         );
+      }
+      break;
+    }
+    case "SoftresReserveUpdate": {
+      // Per-reserve delta on the channel topic. Only meaningful if the
+      // carrying message is cached; a cold render re-hydrates via the
+      // bulk softres fetch instead.
+      const message = client.messages.getOrPartial(event.message_id);
+      if (message && message.softres?.id === event.id) {
+        const current = client.messages.getUnderlyingObject(
+          event.message_id,
+        ).softresState;
+
+        // A locked sheet's reserves are final (the server rejects writes
+        // once locked): a straggling reserve update that lost a race with
+        // the lock must not mutate them.
+        if (current?.locked) break;
+
+        // Merge the per-item deltas into the cached full map, when this
+        // viewer has one (an explicit 0 removes the key — the full-model
+        // convention omits zero-count items). Without a cached map there
+        // is nothing sound to merge into; the aggregate total still
+        // updates below.
+        let itemCounts = current?.itemCounts;
+        if (itemCounts && event.changed_item_counts) {
+          itemCounts = { ...itemCounts };
+          for (const [item, count] of Object.entries(
+            event.changed_item_counts,
+          )) {
+            if (count === 0) delete itemCounts[item];
+            else itemCounts[item] = count;
+          }
+        }
+
+        // Upsert / drop the row in the cached visible list, when present.
+        let reserves = current?.reserves;
+        if (reserves) {
+          if (event.reserve) {
+            const row = event.reserve;
+            const index = reserves.findIndex(
+              (existing) => existing.user_id === row.user_id,
+            );
+            reserves =
+              index === -1
+                ? [...reserves, row]
+                : reserves.map((existing, at) =>
+                    at === index ? row : existing,
+                  );
+          } else if (event.removed_user) {
+            reserves = reserves.filter(
+              (existing) => existing.user_id !== event.removed_user,
+            );
+          }
+        }
+
+        // This user's own row can change from another session; visible
+        // sheets carry it in the event (hidden sheets omit rows entirely —
+        // the own-session REST response keeps `myReserve` fresh there, and
+        // a hidden-sheet cross-session consumer must refetch; see the
+        // `softresReserveUpdate` docs). Both operands must be defined —
+        // `undefined === undefined` must never match.
+        let myReserve = current?.myReserve;
+        const selfId = client.user?.id;
+        if (selfId && event.reserve && event.reserve.user_id === selfId) {
+          myReserve = event.reserve;
+        } else if (selfId && event.removed_user === selfId) {
+          myReserve = undefined;
+        }
+
+        client.messages.updateUnderlyingObject(
+          event.message_id,
+          "softresState",
+          {
+            locked: false,
+            hydrated: false,
+            ...current,
+            totalReserves: event.total_reserves,
+            itemCounts,
+            reserves,
+            myReserve,
+          },
+        );
+
+        client.emit("softresReserveUpdate", message);
+      }
+      break;
+    }
+    case "SoftresSheetUpdate": {
+      // Settings / lock / event-cancel fan-out carrying the full
+      // public-gated model (incl. the fresh definition — the message-
+      // embedded copy stays stale by design).
+      const message = client.messages.getOrPartial(event.message_id);
+      if (message && message.softres?.id === event.id) {
+        const current = client.messages.getUnderlyingObject(
+          event.message_id,
+        ).softresState;
+
+        client.messages.updateUnderlyingObject(
+          event.message_id,
+          "softresState",
+          {
+            ...softresStateFromWire(event.sheet),
+            // The broadcast has no viewer, so `my_reserve` is never
+            // populated — preserve this user's own cached row rather
+            // than clearing it.
+            myReserve: current?.myReserve,
+            hydrated: current?.hydrated ?? false,
+          },
+        );
+
+        client.emit("softresSheetUpdate", message);
       }
       break;
     }

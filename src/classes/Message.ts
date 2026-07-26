@@ -28,6 +28,16 @@ import {
   type PollDefinitionData,
   type PollState,
 } from "./Poll.js";
+import {
+  softresStateFromWire,
+  type DataSoftResEdit,
+  type DataSoftResReserve,
+  type SoftResData,
+  type SoftResDefinitionData,
+  type SoftResExportFormat,
+  type SoftResExportResponseData,
+  type SoftResState,
+} from "./SoftRes.js";
 import type { Server } from "./Server.js";
 import type { ServerMember } from "./ServerMember.js";
 import { ServerRole } from "./ServerRole.js";
@@ -467,6 +477,170 @@ export class Message {
         user as never,
       ),
     );
+  }
+
+  /**
+   * Immutable soft-reserve sheet definition when this message carries one
+   * (server-stamped by the softres create route — unforgeable, the
+   * regular send path has no softres field and rejects the flag bit).
+   * Creation-time snapshot for cold render only: settings edits leave it
+   * stale by design, so prefer {@link softresState}'s `definition` once
+   * hydrated.
+   */
+  get softres(): SoftResDefinitionData | undefined {
+    return this.#collection.getUnderlyingObject(this.id).softres;
+  }
+
+  /**
+   * Whether this message carries a soft-reserve sheet
+   */
+  get isSoftRes(): boolean {
+    return this.softres !== undefined;
+  }
+
+  /**
+   * Dynamic soft-reserve state (reserves / counts / lock), if hydrated.
+   * Populated by {@link fetchSoftRes}, the reserve/manage calls and the
+   * `SoftresReserveUpdate` / `SoftresSheetUpdate` events.
+   */
+  get softresState(): SoftResState | undefined {
+    return this.#collection.getUnderlyingObject(this.id).softresState;
+  }
+
+  /**
+   * Stamp new dynamic soft-reserve state onto the message (merging over
+   * what is already known so a partial WS update never erases the rest).
+   */
+  #mergeSoftresState(next: Partial<SoftResState>): void {
+    const current = this.softresState;
+    this.#collection.updateUnderlyingObject(this.id, "softresState", {
+      locked: false,
+      totalReserves: 0,
+      hydrated: false,
+      ...current,
+      ...next,
+    });
+  }
+
+  /**
+   * Apply a full wire sheet model onto this message (used by the client's
+   * bulk hydration — one `POST …/softres/fetch` per page of messages —
+   * and by every route response). Authoritative: hidden-gated fields the
+   * server withheld are cleared rather than kept stale.
+   */
+  applySoftresState(data: SoftResData): void {
+    this.#mergeSoftresState(softresStateFromWire(data));
+  }
+
+  /**
+   * Fetch this sheet's dynamic state from the API. Reserve rows and
+   * per-item counts arrive only when the server allows this user to see
+   * them (sheet not hidden / creator / moderator) — the caller's own row
+   * always arrives.
+   */
+  async fetchSoftRes(): Promise<SoftResState | undefined> {
+    const softres = this.softres;
+    if (!softres) return undefined;
+
+    const data = (await this.#collection.client.channels.apiReq(
+      "GET",
+      `/channels/${this.channelId}/softres/${softres.id}`,
+    )) as SoftResData;
+
+    this.applySoftresState(data);
+    return this.softresState;
+  }
+
+  /**
+   * Set (or replace) this user's reservation row on the sheet.
+   * Rejects with `SoftResLocked` when the sheet locked meanwhile, and
+   * `SoftResItemCapReached` when a per-item cap filled first — callers
+   * should surface the error and refetch.
+   */
+  async reserveSoftRes(data: DataSoftResReserve): Promise<void> {
+    const softres = this.softres;
+    if (!softres) return;
+
+    const state = (await this.#collection.client.channels.apiReq(
+      "PUT",
+      `/channels/${this.channelId}/softres/${softres.id}/reserve`,
+      { body: data },
+    )) as SoftResData;
+
+    this.applySoftresState(state);
+  }
+
+  /**
+   * Retract this user's reservation row from the sheet.
+   */
+  async retractSoftRes(): Promise<void> {
+    const softres = this.softres;
+    if (!softres) return;
+
+    const state = (await this.#collection.client.channels.apiReq(
+      "DELETE",
+      `/channels/${this.channelId}/softres/${softres.id}/reserve`,
+    )) as SoftResData;
+
+    // The response reflects the retraction (`my_reserve` absent);
+    // applying the full model clears `myReserve` since every key is set
+    // explicitly by softresStateFromWire.
+    this.applySoftresState(state);
+  }
+
+  /**
+   * Edit the sheet's settings. Creator or ManageMessages only. Raids are
+   * immutable post-create. The message-embedded definition stays stale by
+   * design — the response (and the `SoftresSheetUpdate` fan-out) carries
+   * the fresh copy on `definition`.
+   */
+  async editSoftRes(data: DataSoftResEdit): Promise<void> {
+    const softres = this.softres;
+    if (!softres) return;
+
+    const state = (await this.#collection.client.channels.apiReq(
+      "PATCH",
+      `/channels/${this.channelId}/softres/${softres.id}`,
+      { body: data },
+    )) as SoftResData;
+
+    this.applySoftresState(state);
+  }
+
+  /**
+   * Lock (`true`) or unlock (`false`) the sheet. Creator or
+   * ManageMessages only. Unlocking also clears the `locks_at` auto-lock
+   * snapshot server-side (re-arm via {@link editSoftRes} with
+   * `lock_at_event_start: true`).
+   */
+  async lockSoftRes(locked: boolean): Promise<void> {
+    const softres = this.softres;
+    if (!softres) return;
+
+    const state = (await this.#collection.client.channels.apiReq(
+      locked ? "POST" : "DELETE",
+      `/channels/${this.channelId}/softres/${softres.id}/lock`,
+    )) as SoftResData;
+
+    this.applySoftresState(state);
+  }
+
+  /**
+   * Render an addon-importable export of the sheet's FULL reserve data.
+   * Creator or ManageMessages only — the export ignores `hidden` by
+   * design.
+   */
+  async exportSoftRes(
+    format: SoftResExportFormat,
+  ): Promise<SoftResExportResponseData | undefined> {
+    const softres = this.softres;
+    if (!softres) return undefined;
+
+    return (await this.#collection.client.channels.apiReq(
+      "GET",
+      `/channels/${this.channelId}/softres/${softres.id}/export`,
+      { query: { format } },
+    )) as SoftResExportResponseData;
   }
 
   /**

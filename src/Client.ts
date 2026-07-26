@@ -15,6 +15,11 @@ import type { Emoji } from "./classes/Emoji.js";
 import type { InteractionCreateEvent } from "./classes/Interaction.js";
 import type { Message } from "./classes/Message.js";
 import type { ScheduledMessageData } from "./classes/ScheduledMessage.js";
+import type {
+  SoftResCatalogResponse,
+  SoftResData,
+  SoftResRaidItemsResponse,
+} from "./classes/SoftRes.js";
 import type { Server } from "./classes/Server.js";
 import type { ServerMember } from "./classes/ServerMember.js";
 import type { User } from "./classes/User.js";
@@ -125,6 +130,23 @@ export type Events = {
 
   /** A poll closed with final results. */
   pollClose: [message: Message];
+
+  /**
+   * A soft-reserve sheet's reserve rows / aggregate counts changed. On
+   * HIDDEN sheets the event carries the new total only (rows and per-item
+   * deltas are exactly what `hidden` conceals), so privileged viewers
+   * (creator / ManageMessages) — and any viewer with their own row set
+   * from another session — must refetch over REST to stay accurate.
+   */
+  softresReserveUpdate: [message: Message];
+
+  /**
+   * A soft-reserve sheet's settings or lock state changed. The applied
+   * payload is the PUBLIC-gated model: on hidden sheets it clears the
+   * cached `reserves` / `itemCounts` even for the leader, whose
+   * privileged view must be refetched over REST on every one of these.
+   */
+  softresSheetUpdate: [message: Message];
 
   /**
    * An ephemeral interaction response addressed to this user (private
@@ -737,6 +759,75 @@ export class Client extends AsyncEventEmitter<Events> {
     }, data.retry_after * 1000);
 
     this.#slowmodeTimers.set(channelId, timer);
+  }
+
+  /**
+   * In-flight/settled soft-reserve catalog fetch — static game data,
+   * cached for the client's lifetime (promises so concurrent callers
+   * share one request; cleared on rejection so a retry can succeed).
+   */
+  #softresCatalog?: Promise<SoftResCatalogResponse>;
+
+  /** Per-raid loot-table cache, same policy as {@link #softresCatalog}. */
+  #softresRaidItems = new Map<string, Promise<SoftResRaidItemsResponse>>();
+
+  /**
+   * Fetch the soft-reserve catalog: editions and their raids, for the
+   * sheet-create picker. Static game data — cached after the first call.
+   */
+  fetchSoftResCatalog(): Promise<SoftResCatalogResponse> {
+    if (!this.#softresCatalog) {
+      this.#softresCatalog = (
+        this.#apiReq("GET", "/softres/catalog") as Promise<SoftResCatalogResponse>
+      ).catch((error) => {
+        this.#softresCatalog = undefined;
+        throw error;
+      });
+    }
+    return this.#softresCatalog;
+  }
+
+  /**
+   * Fetch one raid's reservable loot table for the item picker. Static
+   * game data — cached per raid after the first call.
+   */
+  fetchSoftResRaidItems(raidId: string): Promise<SoftResRaidItemsResponse> {
+    let pending = this.#softresRaidItems.get(raidId);
+    if (!pending) {
+      pending = (
+        this.#apiReq(
+          "GET",
+          `/softres/catalog/${raidId}`,
+        ) as Promise<SoftResRaidItemsResponse>
+      ).catch((error) => {
+        this.#softresRaidItems.delete(raidId);
+        throw error;
+      });
+      this.#softresRaidItems.set(raidId, pending);
+    }
+    return pending;
+  }
+
+  /**
+   * Fetch the soft-reserve sheet linked to a calendar event, if any.
+   * Resolves to `null` when the event has no sheet (or its channel is not
+   * visible to this user — both are 404 server-side, no oracle). When the
+   * carrying message is cached, the state is also stamped onto it.
+   */
+  async fetchEventSoftRes(eventId: string): Promise<SoftResData | null> {
+    let data: SoftResData;
+    try {
+      data = (await this.#apiReq(
+        "GET",
+        `/events/event/${eventId}/softres`,
+      )) as SoftResData;
+    } catch (error) {
+      if ((error as { type?: string })?.type === "NotFound") return null;
+      throw error;
+    }
+
+    this.messages.get(data.message_id)?.applySoftresState(data);
+    return data;
   }
 
   /**

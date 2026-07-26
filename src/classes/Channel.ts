@@ -39,6 +39,7 @@ import type {
 import type { ChannelFollowData } from "./ChannelFollow.js";
 import type { ApplicationCommandData } from "./Interaction.js";
 import type { DataPollCreate } from "./Poll.js";
+import type { DataSoftResCreate } from "./SoftRes.js";
 import type { ScheduledMessageData } from "./ScheduledMessage.js";
 import type { DataCreateThread, ThreadChannelData } from "./Thread.js";
 import type { User } from "./User.js";
@@ -746,6 +747,33 @@ export class Channel {
     const message = (await this.#collection.apiReq(
       "POST",
       `/channels/${this.id}/polls`,
+      { body: { ...data, nonce: data.nonce ?? idempotencyKey } },
+    )) as { _id: string };
+
+    return this.#collection.client.messages.getOrCreate(
+      message._id,
+      message as never,
+      true,
+    );
+  }
+
+  /**
+   * Create a soft-reserve sheet in this channel. The server assembles the
+   * message (SoftRes flag + embedded definition), validates every raid /
+   * item against its checked-in catalog and counts reserves
+   * authoritatively.
+   * @param data Sheet creation data
+   * @requires a server-mediated channel; the composer additionally hides
+   *   sheets for E2EE conversations (they are plaintext by construction)
+   * @returns The newly-created sheet message
+   */
+  async createSoftRes(
+    data: DataSoftResCreate,
+    idempotencyKey: string = ulid(),
+  ): Promise<Message> {
+    const message = (await this.#collection.apiReq(
+      "POST",
+      `/channels/${this.id}/softres`,
       { body: { ...data, nonce: data.nonce ?? idempotencyKey } },
     )) as { _id: string };
 
