@@ -18,6 +18,16 @@ export type DiscordImportSummary = {
   categories_created: number;
   channels_skipped: number;
   /**
+   * Roles recreated. Discord's `@everyone` is NOT counted here — it is not a
+   * role on Sloga, its permissions become the server's default permissions.
+   *
+   * Optional on the wire: a job written before slice 1 has no such field, and
+   * the server defaults it to 0 rather than rewriting old rows.
+   */
+  roles_created?: number;
+  /** Roles in the template that were not recreated (cap, or failed insert) */
+  roles_skipped?: number;
+  /**
    * Free-text server-generated notes ("3 threads skipped", …). English only —
    * these are NOT translated, by design (they are generated server-side and
    * carry no message ids). Render verbatim.
@@ -25,29 +35,34 @@ export type DiscordImportSummary = {
   notes: string[];
 };
 
-/** An import job row (wire shape, owner-private) */
+/**
+ * An import job as the API returns it.
+ *
+ * This mirrors delta's `ImportJobResponse` DTO, **not** the stored
+ * `DiscordImportJob` model. The DTO renames `_id` → `job_id` and deliberately
+ * omits `user_id` and `template_code`, so this type must not claim them: a
+ * field named here but absent on the wire is silently `undefined`, and the
+ * store compares job ids to decide whether an update belongs to the import it
+ * is tracking. Getting that comparison wrong makes every fetched row look like
+ * a foreign job and quietly disables the summary, the poll fallback and resume.
+ */
 export type DiscordImportJobData = {
-  _id: string;
-  /** Id of the user who started the import (and who will own the server) */
-  user_id: string;
-  /** The Discord guild-template code the job is importing */
-  template_code: string;
+  job_id: string;
   status: DiscordImportStatus;
   /**
    * Current progress stage.
    *
-   * **Deliberately typed as an opaque `string`, not a union.** Slice 0 emits
-   * `Fetching | Server | Channels | Membership | Invite | Done`, and later
-   * slices add more (`Roles`, …). A deployed client must render an unknown
-   * stage gracefully instead of showing "undefined" from an exhaustive lookup.
+   * **Deliberately typed as an opaque `string`, not a union.** Slice 0 emitted
+   * `Fetching | Server | Channels | Membership | Invite | Done`, slice 1 added
+   * `Roles`, and later slices add more. A deployed client must render an
+   * unknown stage gracefully instead of showing "undefined" from an exhaustive
+   * lookup.
    */
   stage: string;
   /** Items completed within the current stage (may legitimately be 0) */
   done: number;
   /** Items in the current stage; **0 while the stage is indeterminate** */
   total: number;
-  /** Worker heartbeat — the sweeper reaps jobs that stop bumping this */
-  updated_at: string;
   /** Set once the Sloga server exists */
   server_id?: string;
   /** Set once the invite has been created */
