@@ -13,13 +13,21 @@ export class VoiceParticipant {
 
   readonly isReceiving: Accessor<boolean>;
   readonly isPublishing: Accessor<boolean>;
+  /**
+   * True while EITHER a screen-video or screen-audio track is live (the
+   * historical conflated flag). Use `isScreenVideo` when the consumer needs
+   * "there is actually video to look at".
+   */
   readonly isScreensharing: Accessor<boolean>;
   readonly isCamera: Accessor<boolean>;
+  /** True only while a screen VIDEO track is live. */
+  readonly isScreenVideo: Accessor<boolean>;
 
   #setReceiving: Setter<boolean>;
   #setPublishing: Setter<boolean>;
   #setScreensharing: Setter<boolean>;
   #setCamera: Setter<boolean>;
+  #setScreenVideo: Setter<boolean>;
 
   /**
    * Construct Server Ban
@@ -48,6 +56,13 @@ export class VoiceParticipant {
     const [isCamera, setCamera] = createSignal(data.camera);
     this.isCamera = isCamera;
     this.#setCamera = setCamera;
+
+    // Absent from payloads sent by older servers — treat missing as false.
+    const [isScreenVideo, setScreenVideo] = createSignal(
+      data.screen_video ?? false,
+    );
+    this.isScreenVideo = isScreenVideo;
+    this.#setScreenVideo = setScreenVideo;
   }
 
   /**
@@ -69,6 +84,10 @@ export class VoiceParticipant {
 
     if (typeof data.camera === "boolean") {
       this.#setCamera(data.camera);
+    }
+
+    if (typeof data.screen_video === "boolean") {
+      this.#setScreenVideo(data.screen_video);
     }
   }
 }

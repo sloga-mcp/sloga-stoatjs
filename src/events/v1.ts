@@ -347,8 +347,19 @@ export type UserVoiceState = {
   joined_at: number;
   is_receiving: boolean;
   is_publishing: boolean;
+  /**
+   * True while EITHER a screen-video or screen-audio track is live — the two
+   * are conflated, so this can read true with no video published at all.
+   * Anything that needs "screen video is actually live" must use
+   * `screen_video` instead.
+   */
   screensharing: boolean;
   camera: boolean;
+  /**
+   * True only while a screen VIDEO track is live. Additive field — absent
+   * from payloads sent by older servers, so treat missing as false.
+   */
+  screen_video?: boolean;
 };
 
 /**
