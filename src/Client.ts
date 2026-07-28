@@ -205,6 +205,70 @@ export type Events = {
     },
   ];
 
+  /**
+   * A sharer offered this user remote control of their machine (private
+   * topic; the target only). Ships dark behind the server's
+   * `remote_control` feature flag.
+   *
+   * `sharerEphemeralPub` / `rcSessionId` are OPAQUE base64 carried for the
+   * native key agreement — never parse or derive from them here.
+   *
+   * The private topic reaches EVERY session of this user, including ones
+   * not in the call; the server's accept route is what enforces that the
+   * responding session is the live participant.
+   */
+  remoteControlOffered: [
+    detail: {
+      channelId: string;
+      offerId: string;
+      sharerId: string;
+      targetId: string;
+      sharerEphemeralPub: string;
+      rcSessionId: string;
+    },
+  ];
+
+  /** A control offer this user made was declined (private; sharer only). */
+  remoteControlDeclined: [
+    detail: {
+      channelId: string;
+      offerId: string;
+      sharerId: string;
+      targetId: string;
+    },
+  ];
+
+  /**
+   * A control offer this user made was accepted (private; sharer only).
+   * Carries the controller's opaque ephemeral public key — the return path
+   * of the key agreement.
+   */
+  remoteControlAccepted: [
+    detail: {
+      channelId: string;
+      offerId: string;
+      grantId: string;
+      sharerId: string;
+      controllerId: string;
+      controllerEphemeralPub: string;
+    },
+  ];
+
+  /**
+   * Redacted third-party visibility: a control session is active in this
+   * channel and between whom (channel topic; no grant id, nothing
+   * actionable). Clear the indicator on `remoteControlEnded` with the same
+   * (channelId, sharerId) key.
+   */
+  remoteControlActive: [
+    detail: { channelId: string; sharerId: string; controllerId: string },
+  ];
+
+  /** A control session ended (channel topic). */
+  remoteControlEnded: [
+    detail: { channelId: string; sharerId: string; reason: string },
+  ];
+
   userSlowmodes: [];
 
   /**

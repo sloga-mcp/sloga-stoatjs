@@ -222,6 +222,67 @@ type ServerMessage =
       token: string;
     }
   | {
+      /**
+       * A sharer offered remote control of their machine to this user.
+       * PRIVATE topic — the target only. Ships dark behind the server's
+       * `remote_control` feature flag.
+       *
+       * The two byte fields are opaque base64 carried for the slice-3 key
+       * agreement; nothing in this library interprets them.
+       */
+      type: "RemoteControlOffered";
+      channel_id: string;
+      offer_id: string;
+      sharer_id: string;
+      target_id: string;
+      sharer_ephemeral_pub: string;
+      rc_session_id: string;
+    }
+  | {
+      /** A control offer was declined. PRIVATE topic — the sharer only. */
+      type: "RemoteControlDeclined";
+      channel_id: string;
+      offer_id: string;
+      sharer_id: string;
+      target_id: string;
+    }
+  | {
+      /**
+       * A control offer was accepted and the grant is live. PRIVATE topic —
+       * the SHARER only: this is the return path of the key exchange and
+       * carries the controller's ephemeral public key.
+       */
+      type: "RemoteControlAccepted";
+      channel_id: string;
+      offer_id: string;
+      grant_id: string;
+      sharer_id: string;
+      controller_id: string;
+      controller_ephemeral_pub: string;
+    }
+  | {
+      /**
+       * Redacted channel-topic visibility event: a control session is
+       * active in this channel, and between whom. Carries no grant id and
+       * nothing actionable. Keyed by (channel_id, sharer_id).
+       */
+      type: "RemoteControlActive";
+      channel_id: string;
+      sharer_id: string;
+      controller_id: string;
+    }
+  | {
+      /**
+       * A control session ended. Channel topic, keyed like
+       * `RemoteControlActive` so the indicator clears on (channel_id,
+       * sharer_id).
+       */
+      type: "RemoteControlEnded";
+      channel_id: string;
+      sharer_id: string;
+      reason: string;
+    }
+  | {
       type: "UserSlowmodes";
       slowmodes: UserSlowmodes[];
     }
@@ -1209,6 +1270,57 @@ export async function handleEvent(
     }
     case "UserMoveVoiceChannel": {
       // todo
+      break;
+    }
+    case "RemoteControlOffered": {
+      // Private to the target. Transient — the offer lives server-side
+      // behind a short TTL, so nothing is cached here.
+      client.emit("remoteControlOffered", {
+        channelId: event.channel_id,
+        offerId: event.offer_id,
+        sharerId: event.sharer_id,
+        targetId: event.target_id,
+        sharerEphemeralPub: event.sharer_ephemeral_pub,
+        rcSessionId: event.rc_session_id,
+      });
+      break;
+    }
+    case "RemoteControlDeclined": {
+      client.emit("remoteControlDeclined", {
+        channelId: event.channel_id,
+        offerId: event.offer_id,
+        sharerId: event.sharer_id,
+        targetId: event.target_id,
+      });
+      break;
+    }
+    case "RemoteControlAccepted": {
+      // Private to the sharer; carries the controller's ephemeral public
+      // key, which stays opaque here — the native layer consumes it.
+      client.emit("remoteControlAccepted", {
+        channelId: event.channel_id,
+        offerId: event.offer_id,
+        grantId: event.grant_id,
+        sharerId: event.sharer_id,
+        controllerId: event.controller_id,
+        controllerEphemeralPub: event.controller_ephemeral_pub,
+      });
+      break;
+    }
+    case "RemoteControlActive": {
+      client.emit("remoteControlActive", {
+        channelId: event.channel_id,
+        sharerId: event.sharer_id,
+        controllerId: event.controller_id,
+      });
+      break;
+    }
+    case "RemoteControlEnded": {
+      client.emit("remoteControlEnded", {
+        channelId: event.channel_id,
+        sharerId: event.sharer_id,
+        reason: event.reason,
+      });
       break;
     }
     case "UserSlowmodes": {

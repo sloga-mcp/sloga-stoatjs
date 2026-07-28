@@ -87,6 +87,11 @@ export const Permission = {
   Listen: 2n ** 36n,
   /// Use the server soundboard in a voice call
   UseSoundboard: 2n ** 40n,
+  /// Offer remote control of one's own machine while screen sharing.
+  /// Checked on the SHARER (who may offer their own desktop), and only in
+  /// SERVER channels — DMs and group DMs gate on the instance config flag
+  /// alone. Auto-granted to owners/staff via GrantAllSafe.
+  UseRemoteControl: 2n ** 41n,
 
   // * Mention permissions
   /// Mention @everyone or @online
@@ -95,7 +100,8 @@ export const Permission = {
   MentionRoles: 2n ** 38n,
 
   // * Misc. permissions
-  // % Bits 39 to 52: free area
+  // % Bits 42 to 52: free area
+  // % (39 = BypassSlowmode, 40 = UseSoundboard, 41 = UseRemoteControl)
   // % Bits 53 to 64: do not use
 
   // * Grant all permissions
