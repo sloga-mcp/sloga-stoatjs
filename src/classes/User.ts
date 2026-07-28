@@ -249,11 +249,12 @@ export class User {
         (member) => member.id.user === this.id,
       )
     ) {
-      if (this.#collection.client.user?.bot || this.bot) {
-        permissions |= UserPermission.SendMessage;
-      }
-
-      permissions |= UserPermission.Access | UserPermission.ViewProfile;
+      // a mutual server or group is enough to message someone, mirroring
+      // the backend's calculate_user_permissions
+      permissions |=
+        UserPermission.Access |
+        UserPermission.ViewProfile |
+        UserPermission.SendMessage;
     }
 
     return permissions;
