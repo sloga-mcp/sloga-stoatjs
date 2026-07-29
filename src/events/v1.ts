@@ -421,6 +421,17 @@ export type UserVoiceState = {
    * from payloads sent by older servers, so treat missing as false.
    */
   screen_video?: boolean;
+  /**
+   * True while this participant has told the server they are recording the
+   * call locally. Additive field — treat missing as false.
+   *
+   * A SELF-REPORT, unlike every other flag here: the recording runs in the
+   * participant's own client and neither the SFU nor the API can observe it,
+   * so false means "nobody said they are recording", not "nobody is". It
+   * rides on voice state precisely so a late joiner sees an in-progress
+   * recording in the roster they read on join.
+   */
+  recording?: boolean;
 };
 
 /**

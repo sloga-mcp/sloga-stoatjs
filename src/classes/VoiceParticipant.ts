@@ -22,12 +22,22 @@ export class VoiceParticipant {
   readonly isCamera: Accessor<boolean>;
   /** True only while a screen VIDEO track is live. */
   readonly isScreenVideo: Accessor<boolean>;
+  /**
+   * True while this participant says they are recording the call locally.
+   *
+   * A self-report the server relays, not something it observed — see
+   * `UserVoiceState.recording`. Present on a participant fetched before
+   * joining, which is what lets a pre-join surface warn about a recording
+   * already in progress.
+   */
+  readonly isRecording: Accessor<boolean>;
 
   #setReceiving: Setter<boolean>;
   #setPublishing: Setter<boolean>;
   #setScreensharing: Setter<boolean>;
   #setCamera: Setter<boolean>;
   #setScreenVideo: Setter<boolean>;
+  #setRecording: Setter<boolean>;
 
   /**
    * Construct Server Ban
@@ -63,6 +73,10 @@ export class VoiceParticipant {
     );
     this.isScreenVideo = isScreenVideo;
     this.#setScreenVideo = setScreenVideo;
+
+    const [isRecording, setRecording] = createSignal(data.recording ?? false);
+    this.isRecording = isRecording;
+    this.#setRecording = setRecording;
   }
 
   /**
@@ -88,6 +102,10 @@ export class VoiceParticipant {
 
     if (typeof data.screen_video === "boolean") {
       this.#setScreenVideo(data.screen_video);
+    }
+
+    if (typeof data.recording === "boolean") {
+      this.#setRecording(data.recording);
     }
   }
 }

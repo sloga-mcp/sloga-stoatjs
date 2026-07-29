@@ -14,7 +14,11 @@ import { Message } from "./index.js";
  * System message types — stoat-api 0.13.5 predates threads, so the
  * `thread_created` wire type is declared locally (CalendarEvent precedent).
  */
-export type SystemMessageType = APISystemMessage["type"] | "thread_created";
+export type SystemMessageType =
+  | APISystemMessage["type"]
+  | "thread_created"
+  | "call_recording_started"
+  | "call_recording_stopped";
 
 /**
  * Serialized `SystemMessage::ThreadCreated { id, by, name }` posted into the
@@ -28,6 +32,21 @@ interface APIThreadCreatedSystemMessage {
   by: string;
   /** Thread name at creation time */
   name: string;
+}
+
+/**
+ * Serialized `SystemMessage::CallRecordingStarted | CallRecordingStopped
+ * { by }`. Declared locally for the same reason as `thread_created` —
+ * stoat-api 0.13.5 predates both.
+ *
+ * This is the DURABLE half of recording disclosure: the in-call banner dies
+ * with the call, so without these two messages the channel would keep no
+ * record that a recording ever happened.
+ */
+interface APICallRecordingSystemMessage {
+  type: "call_recording_started" | "call_recording_stopped";
+  /** User who started / stopped recording */
+  by: string;
 }
 
 /**
@@ -64,6 +83,18 @@ export abstract class SystemMessage {
       return new ThreadCreatedSystemMessage(
         client,
         message as unknown as APIThreadCreatedSystemMessage,
+      );
+    }
+
+    // Same treatment, same reason (call-recording plan §1).
+    const type = (message as { type: string }).type;
+    if (
+      type === "call_recording_started" ||
+      type === "call_recording_stopped"
+    ) {
+      return new CallRecordingSystemMessage(
+        client,
+        message as unknown as APICallRecordingSystemMessage,
       );
     }
 
@@ -344,6 +375,33 @@ export class CallStartedSystemMessage extends SystemMessage {
 
   /**
    * User that started the call
+   */
+  get by(): User | undefined {
+    return this.client!.users.get(this.byId);
+  }
+}
+
+/**
+ * Call Recording System Message — posted when a participant starts or stops
+ * recording a call locally (server-authored only).
+ *
+ * `type` distinguishes started from stopped, so one class covers both.
+ */
+export class CallRecordingSystemMessage extends SystemMessage {
+  readonly byId: string;
+
+  /**
+   * Construct System Message
+   * @param client Client
+   * @param systemMessage System Message
+   */
+  constructor(client: Client, systemMessage: APICallRecordingSystemMessage) {
+    super(client, systemMessage.type);
+    this.byId = systemMessage.by;
+  }
+
+  /**
+   * User that started / stopped recording
    */
   get by(): User | undefined {
     return this.client!.users.get(this.byId);
