@@ -1364,6 +1364,14 @@ export async function handleEvent(
       // soft-cancel (event.cancelled === true).
       const instance = client.calendarEvents.upsert(event.event);
       client.emit("calendarEventUpdate", instance);
+      // A channel-scoped event whose channel we cannot resolve is one the viewer
+      // lost visibility of (the server tells the OLD topic about a move by
+      // re-pointing the event at its new channel). Drop it AFTER the emit —
+      // listeners (the calendar grid) still refetch, but we never cache a card
+      // that 403s on open.
+      if (event.event.channel && !client.channels.get(event.event.channel)) {
+        client.calendarEvents.delete(event.event._id);
+      }
       break;
     }
     case "CalendarEventInvite": {

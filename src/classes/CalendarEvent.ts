@@ -130,6 +130,12 @@ export interface DataEditEvent {
   timezone?: string;
   recurrence?: RecurrenceRuleData;
   color?: string;
+  /**
+   * Move the event to a different channel (the visibility anchor). Must belong
+   * to the event's server; the caller needs `ViewChannel` there. Unset via
+   * `remove: ["Channel"]`.
+   */
+  channel?: string;
   /** Attachment file ids to ADD (uploaded to the `attachments` bucket). */
   attachments?: string[];
   /** Attachment file ids to DETACH (the files are marked deleted server-side). */
