@@ -912,6 +912,29 @@ export class Client extends AsyncEventEmitter<Events> {
   }
 
   /**
+   * Start the optional sticker-import step from a **Completed** template
+   * import job. Requires the instance's importer bot to have been added to
+   * the source guild first (the modal walks the user through it); until it
+   * has, the job fails with an actionable message.
+   *
+   * No body: the guild id, target server and ownership are all resolved
+   * server-side from the owner-scoped parent job.
+   *
+   * Rejects with the parsed API error body — notably
+   * `ImportAlreadyInProgress` (one job per user), `InvalidOperation` (parent
+   * not Completed / predates sticker support) and `OperationFailed` (bot
+   * upgrade not configured).
+   * @param jobId The Completed TEMPLATE job to import stickers for
+   * @returns The NEW sticker job to follow
+   */
+  async importDiscordStickers(jobId: string): Promise<DiscordImportJobData> {
+    return (await this.#apiReq(
+      "POST",
+      `/import/discord/jobs/${jobId}/stickers`,
+    )) as DiscordImportJobData;
+  }
+
+  /**
    * Fetch one import job by id. Owner-scoped — 404 for anyone else.
    *
    * The reconnect-safe fallback for missed `discordImport*` events; poll this
