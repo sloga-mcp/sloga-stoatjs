@@ -357,6 +357,19 @@ type ServerMessage =
       server_id: string;
       emoji?: string;
     }
+  | {
+      type: "CallCaption";
+      channel_id: string;
+      /**
+       * Speaker's SFU identity (device-qualified on E2EE-capable calls).
+       * Resolved server-side — this is what participant tiles are keyed by,
+       * so it is deliberately not something a sender can choose.
+       */
+      identity: string;
+      user_id: string;
+      text: string;
+      lang: string;
+    }
   | { type: "MessageScheduled"; message: ScheduledMessageData }
   | { type: "MessageScheduleCancelled"; id: string; channel: string }
   | {
@@ -1592,6 +1605,21 @@ export async function handleEvent(
         soundId: event.id,
         serverId: event.server_id,
         emoji: event.emoji,
+      });
+      break;
+    }
+    case "CallCaption": {
+      // One finalized caption line from a speaker in a voice call, fanned to
+      // the call's participants over their private topics. Transient and
+      // never stored; the voice store renders it only while we are in that
+      // call. Note the server sends finals only — interim recognizer results
+      // stay on the speaker's own screen.
+      client.emit("callCaption", {
+        channelId: event.channel_id,
+        identity: event.identity,
+        userId: event.user_id,
+        text: event.text,
+        lang: event.lang,
       });
       break;
     }

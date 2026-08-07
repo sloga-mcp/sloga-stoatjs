@@ -206,6 +206,30 @@ export type Events = {
   ];
 
   /**
+   * One finalized live caption from a speaker in a voice call, fanned to the
+   * call's participants over their private topics (NOT the channel topic —
+   * that boundary is ViewChannel, which would hand a live transcript to
+   * text-channel lurkers who never joined).
+   *
+   * `identity` is the speaker's SFU identity, resolved server-side, and is
+   * what the caption overlay keys off. Finals only: interim recognizer
+   * results never leave the speaker's own machine.
+   *
+   * Like every private topic this reaches EVERY session of this user,
+   * including ones not in the call — the voice store scopes it to the
+   * active channel.
+   */
+  callCaption: [
+    detail: {
+      channelId: string;
+      identity: string;
+      userId: string;
+      text: string;
+      lang: string;
+    },
+  ];
+
+  /**
    * A sharer offered this user remote control of their machine (private
    * topic; the target only). Ships dark behind the server's
    * `remote_control` feature flag.

@@ -1578,6 +1578,35 @@ export class Channel {
   }
 
   /**
+   * Relay one finalized live caption to the other participants of this call.
+   * The server validates (participant + `Connect`/`Speak`), fans a
+   * `CallCaption` event to the call's members, and stores nothing.
+   *
+   * This exists because captions CANNOT ride a LiveKit data channel here: the
+   * voice token is minted `can_publish_data: false`, so the SFU silently drops
+   * every packet a speaker publishes.
+   *
+   * Raw fetch, NOT the typed client: this route is absent from stoat-api's
+   * generated tables and the typed client sends `{}` for routes it does not
+   * know — which would drop the body and post an empty caption.
+   *
+   * @param text Finalized transcript in the speaker's own language
+   * @param lang BCP-47 language the speaker was recognized in
+   */
+  async sendCaption(text: string, lang: string): Promise<void> {
+    const client = this.#collection.client;
+    const [headerKey, headerValue] = client.authenticationHeader;
+    await fetch(`${client.options.baseURL}/channels/${this.id}/captions`, {
+      method: "POST",
+      headers: {
+        [headerKey]: headerValue,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ text, lang }),
+    });
+  }
+
+  /**
    * Start typing in this channel
    * @requires `DirectMessage`, `Group`, `TextChannel`
    */
