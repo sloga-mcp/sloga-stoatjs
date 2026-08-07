@@ -294,6 +294,29 @@ export class Server {
   }
 
   /**
+   * Total unread messages across this server's channels.
+   *
+   * Muted channels are left out — they do not raise the unread indicator, so
+   * they should not inflate the number sitting next to it either.
+   */
+  get unreadCount(): number {
+    return this.channels.reduce(
+      (total, channel) => total + (channel.muted ? 0 : channel.unreadCount),
+      0,
+    );
+  }
+
+  /**
+   * Whether any unread message across this server's channels carries an
+   * attachment
+   */
+  get unreadHasAttachments(): boolean {
+    return this.channels.some(
+      (channel) => !channel.muted && channel.unreadHasAttachments,
+    );
+  }
+
+  /**
    * Find all message IDs of unread messages
    * @returns Array of message IDs which are unread
    */

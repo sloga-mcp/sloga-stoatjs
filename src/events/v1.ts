@@ -36,6 +36,7 @@ import type { ScheduledMessageData } from "../classes/ScheduledMessage.js";
 import { ServerRole } from "../classes/ServerRole.js";
 import type { ThreadChannelData } from "../classes/Thread.js";
 import { VoiceParticipant } from "../classes/VoiceParticipant.js";
+import { UNREAD_COUNT_CAP } from "../hydration/channelUnread.js";
 import { hydrate } from "../hydration/index.js";
 
 /**
@@ -596,17 +597,33 @@ export async function handleEvent(
             event._id,
           );
 
-          if (
-            event.mentions?.includes(client.user!.id) &&
-            client.options.syncUnreads
-          ) {
+          if (client.options.syncUnreads) {
             const unread = client.channelUnreads.for(channel);
-            unread.messageMentionIds.add(event._id);
-            client.channels.updateUnderlyingObject(
-              event.channel,
-              "lastMessageId",
-              event._id,
+
+            // Keep the badge count live between connects. It saturates at the
+            // same cap the server uses, so the two agree on "99+".
+            client.channelUnreads.updateUnderlyingObject(
+              channel.id,
+              "unreadCount",
+              Math.min(unread.unreadCount + 1, UNREAD_COUNT_CAP),
             );
+
+            if (event.attachments?.length && !unread.unreadHasAttachments) {
+              client.channelUnreads.updateUnderlyingObject(
+                channel.id,
+                "unreadHasAttachments",
+                true,
+              );
+            }
+
+            if (event.mentions?.includes(client.user!.id)) {
+              unread.messageMentionIds.add(event._id);
+              client.channels.updateUnderlyingObject(
+                event.channel,
+                "lastMessageId",
+                event._id,
+              );
+            }
           }
         });
       }

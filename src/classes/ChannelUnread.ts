@@ -39,4 +39,21 @@ export class ChannelUnread {
   get messageMentionIds(): ReactiveSet<string> {
     return this.#collection.getUnderlyingObject(this.id).messageMentionIds;
   }
+
+  /**
+   * Number of messages sitting after the read pointer, saturating at 100.
+   *
+   * Seeded by the server on connect and kept live client-side from incoming
+   * messages, so it is only ever a lower bound after a long absence.
+   */
+  get unreadCount(): number {
+    return this.#collection.getUnderlyingObject(this.id).unreadCount;
+  }
+
+  /**
+   * Whether any unread message in this channel carries an attachment
+   */
+  get unreadHasAttachments(): boolean {
+    return this.#collection.getUnderlyingObject(this.id).unreadHasAttachments;
+  }
 }

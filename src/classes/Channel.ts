@@ -454,6 +454,28 @@ export class Channel {
   }
 
   /**
+   * How many messages sit after the read pointer in this channel.
+   *
+   * Seeded by the server on connect (saturating at 100) and kept live from
+   * incoming messages. Zero whenever the channel is not {@link unread}, and
+   * also zero when the server did not supply a count — callers should fall
+   * back to the plain unread indicator rather than rendering a "0".
+   */
+  get unreadCount(): number {
+    if (!this.unread) return 0;
+    return this.#collection.client.channelUnreads.for(this).unreadCount;
+  }
+
+  /**
+   * Whether any unread message in this channel carries an attachment
+   */
+  get unreadHasAttachments(): boolean {
+    if (!this.unread) return false;
+    return this.#collection.client.channelUnreads.for(this)
+      .unreadHasAttachments;
+  }
+
+  /**
    * Whether this channel is muted
    */
   get muted(): boolean {
@@ -1353,6 +1375,21 @@ export class Channel {
       if (channelUnread.messageMentionIds.size) {
         channelUnread.messageMentionIds.clear();
       }
+
+      // The tail is read, so the badge count goes with it. Acking a message
+      // that is not the newest leaves the channel unread with a zero count,
+      // which renders as the plain dot — never as a stale number.
+      this.#collection.client.channelUnreads.updateUnderlyingObject(
+        this.id,
+        "unreadCount",
+        0,
+      );
+
+      this.#collection.client.channelUnreads.updateUnderlyingObject(
+        this.id,
+        "unreadHasAttachments",
+        false,
+      );
     });
 
     // Skip request if not needed

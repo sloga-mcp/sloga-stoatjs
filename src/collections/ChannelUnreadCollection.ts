@@ -1,10 +1,11 @@
 import { batch } from "solid-js";
 
-import type { ChannelUnread as APIChannelUnread } from "stoat-api";
-
 import { ChannelUnread } from "../classes/ChannelUnread.js";
 import { Channel } from "../classes/index.js";
-import type { HydratedChannelUnread } from "../hydration/channelUnread.js";
+import type {
+  APIChannelUnread,
+  HydratedChannelUnread,
+} from "../hydration/channelUnread.js";
 
 import { ClassCollection } from "./Collection.js";
 
