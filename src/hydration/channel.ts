@@ -35,6 +35,8 @@ export type HydratedChannel = {
   defaultPermissions?: { a: bigint; d: bigint };
   rolePermissions?: Record<string, { a: bigint; d: bigint }>;
   nsfw: boolean;
+  /** Whether clients hide this channel behind a click-to-reveal gate */
+  spoiler: boolean;
   slowmode: number;
   /** Whether this text channel is an announcement channel (crosspost source) */
   announcement: boolean;
@@ -61,9 +63,10 @@ export type HydratedChannel = {
 };
 
 export const channelHydration: Hydrate<
-  // `announcement` is additive; stoat-api 0.13.5 predates it.
+  // `announcement` and `spoiler` are additive; stoat-api 0.13.5 predates them.
   Merge<APIChannel | ThreadChannelData | ForumChannelData> & {
     announcement?: boolean;
+    spoiler?: boolean;
   },
   HydratedChannel
 > = {
@@ -79,6 +82,7 @@ export const channelHydration: Hydrate<
     last_message_id: "lastMessageId",
     slowmode: "slowmode",
     announcement: "announcement",
+    spoiler: "spoiler",
     parent_channel: "parentChannelId",
     origin_message_id: "originMessageId",
     creator: "creatorId",
@@ -117,6 +121,7 @@ export const channelHydration: Hydrate<
         ]),
       ),
     nsfw: (channel) => channel.nsfw || false,
+    spoiler: (channel) => channel.spoiler ?? false,
     lastMessageId: (channel) => channel.last_message_id!,
     slowmode: (channel) => channel.slowmode ?? 0,
     announcement: (channel) => channel.announcement ?? false,
@@ -150,5 +155,6 @@ export const channelHydration: Hydrate<
     locked: false,
     requireTag: false,
     announcement: false,
+    spoiler: false,
   }),
 };

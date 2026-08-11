@@ -1195,7 +1195,13 @@ export async function handleEvent(
             id: event.user._id,
             data: {
               relationship: event.user.relationship!,
-            },
+              // Forwarded UNCONDITIONALLY: accept/reject/block rewrite the
+              // relationship without a note, serialized as an ABSENT key —
+              // the explicit undefined here is what clears the stale note.
+              relationship_note: (
+                event.user as { relationship_note?: string }
+              ).relationship_note,
+            } as never,
           },
           setReady,
         );

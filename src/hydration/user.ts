@@ -30,11 +30,19 @@ export type UserConnection = {
  * from a fetched, signature-verified key bundle, never from this flag.
  * `connections` (linked streaming channels) is likewise newer than the
  * published types; absent = none.
+ * `relationship_note` (note attached to an incoming friend request; only
+ * ever present for the receiving session user) and `profile_visibility`
+ * (self-only profile privacy setting) are newer than the published types.
  */
 type APIUserExt = APIUser & {
   e2ee_enabled?: boolean;
   connections?: UserConnection[];
+  relationship_note?: string;
+  profile_visibility?: ProfileVisibility;
 };
+
+/** Who may fetch the user's profile page */
+export type ProfileVisibility = "Everyone" | "Friends";
 
 export type HydratedUser = {
   id: string;
@@ -42,11 +50,13 @@ export type HydratedUser = {
   discriminator: string;
   displayName?: string;
   relationship: RelationshipStatus;
+  relationshipNote?: string;
   relations: null;
 
   online: boolean;
   privileged: boolean;
   e2eeEnabled: boolean;
+  profileVisibility: ProfileVisibility;
 
   badges: UserBadges;
   flags: UserFlags;
@@ -64,6 +74,8 @@ export const userHydration: Hydrate<APIUserExt, HydratedUser> = {
     _id: "id",
     display_name: "displayName",
     e2ee_enabled: "e2eeEnabled",
+    relationship_note: "relationshipNote",
+    profile_visibility: "profileVisibility",
   },
   functions: {
     id: (user) => user._id,
@@ -71,12 +83,18 @@ export const userHydration: Hydrate<APIUserExt, HydratedUser> = {
     discriminator: (user) => user.discriminator,
     displayName: (user) => user.display_name!,
     relationship: (user) => user.relationship!,
+    // No default: an explicit undefined must CLEAR a stale note when the
+    // relationship leaves the pending state (see the UserRelationship
+    // handler, which forwards the key unconditionally)
+    relationshipNote: (user) => user.relationship_note,
     relations: () => null,
 
     online: (user) => user.online!,
     privileged: (user) => user.privileged,
     // Serialized only when true (server skips false), so absence = false
     e2eeEnabled: (user) => user.e2ee_enabled ?? false,
+    // Only ever serialized on the session user's own object
+    profileVisibility: (user) => user.profile_visibility ?? "Everyone",
 
     badges: (user) => user.badges!,
     flags: (user) => user.flags!,
@@ -90,6 +108,7 @@ export const userHydration: Hydrate<APIUserExt, HydratedUser> = {
   initialHydration: () => ({
     relationship: "None",
     e2eeEnabled: false,
+    profileVisibility: "Everyone",
     connections: [],
   }),
 };

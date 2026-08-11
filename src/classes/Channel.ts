@@ -406,6 +406,13 @@ export class Channel {
   }
 
   /**
+   * Whether this channel is hidden behind a click-to-reveal spoiler gate
+   */
+  get isSpoiler(): boolean {
+    return this.#collection.getUnderlyingObject(this.id).spoiler ?? false;
+  }
+
+  /**
    * ID of the last message sent in this channel
    */
   get lastMessageId(): string | undefined {

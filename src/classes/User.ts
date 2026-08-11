@@ -144,6 +144,25 @@ export class User {
   }
 
   /**
+   * Note the user attached to their pending friend request, if any
+   * (only ever present on an incoming request)
+   */
+  get relationshipNote(): string | undefined {
+    return this.#collection.getUnderlyingObject(this.id).relationshipNote;
+  }
+
+  /**
+   * Who may fetch the user's profile page
+   * (meaningful on the session user's own object only)
+   */
+  get profileVisibility(): "Everyone" | "Friends" {
+    return (
+      this.#collection.getUnderlyingObject(this.id).profileVisibility ??
+      "Everyone"
+    );
+  }
+
+  /**
    * Whether the user is online
    */
   get online(): boolean {
