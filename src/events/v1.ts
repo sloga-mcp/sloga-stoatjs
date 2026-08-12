@@ -284,6 +284,23 @@ type ServerMessage =
       reason: string;
     }
   | {
+      /**
+       * A call participant asked a streaming participant for a control turn
+       * ("ask for a turn"). Addressed privately to the SHARER only, and like
+       * every private event it reaches all of the sharer's sessions —
+       * receivers must scope to the call they are actually in.
+       *
+       * `requester_id` is stamped by the server from the authenticated
+       * caller. The event is a SUGGESTION for the sharer's queue UI: it
+       * grants nothing, and every actual turn still runs the full
+       * offer→accept→arm path with its native dialog.
+       */
+      type: "CallControlRequest";
+      channel_id: string;
+      requester_id: string;
+      sharer_id: string;
+    }
+  | {
       type: "UserSlowmodes";
       slowmodes: UserSlowmodes[];
     }
@@ -446,6 +463,18 @@ export type UserVoiceState = {
    * recording in the roster they read on join.
    */
   recording?: boolean;
+  /**
+   * True while this participant's client has told the server it can RECEIVE
+   * remote control (a desktop build with a working native layer). Additive
+   * field — treat missing as false.
+   *
+   * A SELF-REPORT like `recording`, with one extra reading rule: false also
+   * covers "hasn't said" — clients that predate the announce route are
+   * capable but silent — so absence must render as unknown, never as
+   * "cannot take control". Advisory routing for the pass-the-controller
+   * queue; the server neither verifies nor acts on it.
+   */
+  rc_capable?: boolean;
 };
 
 /**
@@ -1367,6 +1396,14 @@ export async function handleEvent(
         channelId: event.channel_id,
         sharerId: event.sharer_id,
         reason: event.reason,
+      });
+      break;
+    }
+    case "CallControlRequest": {
+      client.emit("callControlRequest", {
+        channelId: event.channel_id,
+        requesterId: event.requester_id,
+        sharerId: event.sharer_id,
       });
       break;
     }

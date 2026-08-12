@@ -31,6 +31,16 @@ export class VoiceParticipant {
    * already in progress.
    */
   readonly isRecording: Accessor<boolean>;
+  /**
+   * True while this participant's client says it can RECEIVE remote control
+   * (a desktop build with a working native layer).
+   *
+   * A self-report the server relays, not something it verified — see
+   * `UserVoiceState.rc_capable`. False also covers "hasn't said": clients
+   * that predate the announce route are capable but silent, so absence must
+   * be rendered as unknown, never as "cannot take control".
+   */
+  readonly isRcCapable: Accessor<boolean>;
 
   #setReceiving: Setter<boolean>;
   #setPublishing: Setter<boolean>;
@@ -38,6 +48,7 @@ export class VoiceParticipant {
   #setCamera: Setter<boolean>;
   #setScreenVideo: Setter<boolean>;
   #setRecording: Setter<boolean>;
+  #setRcCapable: Setter<boolean>;
 
   /**
    * Construct Server Ban
@@ -77,6 +88,10 @@ export class VoiceParticipant {
     const [isRecording, setRecording] = createSignal(data.recording ?? false);
     this.isRecording = isRecording;
     this.#setRecording = setRecording;
+
+    const [isRcCapable, setRcCapable] = createSignal(data.rc_capable ?? false);
+    this.isRcCapable = isRcCapable;
+    this.#setRcCapable = setRcCapable;
   }
 
   /**
@@ -106,6 +121,10 @@ export class VoiceParticipant {
 
     if (typeof data.recording === "boolean") {
       this.#setRecording(data.recording);
+    }
+
+    if (typeof data.rc_capable === "boolean") {
+      this.#setRcCapable(data.rc_capable);
     }
   }
 }

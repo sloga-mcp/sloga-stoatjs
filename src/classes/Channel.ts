@@ -1614,6 +1614,61 @@ export class Channel {
   }
 
   /**
+   * Announce that this client can RECEIVE remote control in this call
+   * (pass-the-controller capability beacon). Marks the caller's voice state
+   * `rc_capable` for the channel — advisory routing for rotation-queue UIs,
+   * verified by nothing and granting nothing. Idempotent; the flag clears
+   * with the voice state on leaving the call. Fire once after connecting,
+   * and only when the native layer actually reports control support.
+   *
+   * Raw fetch, NOT the typed client, for the `sendCaption` reason: routes
+   * absent from stoat-api's generated tables get their body replaced with
+   * `{}` (harmless here, but the throw-on-4xx behavior differs too).
+   */
+  async announceRcCapable(): Promise<void> {
+    const client = this.#collection.client;
+    const [headerKey, headerValue] = client.authenticationHeader;
+    await fetch(`${client.options.baseURL}/channels/${this.id}/rc_capable`, {
+      method: "PUT",
+      headers: { [headerKey]: headerValue },
+    });
+  }
+
+  /**
+   * Ask a participant who is streaming in this call for a control turn
+   * ("ask for a turn"). The server stamps the asker's identity, validates
+   * (both live participants, `Connect`, the sharer publishing screen video)
+   * and relays a private `CallControlRequest` event to the sharer — a
+   * suggestion for their rotation queue, nothing more.
+   *
+   * Rate-limited server-side (`control_request` bucket): callers should
+   * disable their "ask" affordance after one send rather than retry.
+   *
+   * Raw fetch, NOT the typed client: this route is absent from stoat-api's
+   * generated tables and the typed client sends `{}` for routes it does not
+   * know — which would drop the sharer id and 400.
+   *
+   * @param sharerId User id of the streaming participant being asked
+   * @returns The response status: callers distinguish 429 (asked too often)
+   */
+  async requestControlTurn(sharerId: string): Promise<number> {
+    const client = this.#collection.client;
+    const [headerKey, headerValue] = client.authenticationHeader;
+    const response = await fetch(
+      `${client.options.baseURL}/channels/${this.id}/control/request`,
+      {
+        method: "POST",
+        headers: {
+          [headerKey]: headerValue,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ sharer: sharerId }),
+      },
+    );
+    return response.status;
+  }
+
+  /**
    * Start typing in this channel
    * @requires `DirectMessage`, `Group`, `TextChannel`
    */

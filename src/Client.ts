@@ -293,6 +293,21 @@ export type Events = {
     detail: { channelId: string; sharerId: string; reason: string },
   ];
 
+  /**
+   * A call participant asked this user for a control turn (private topic;
+   * the sharer only). `requesterId` is stamped server-side from the
+   * authenticated asker — but the event is still only a SUGGESTION for the
+   * rotation-queue UI: it grants nothing, and every actual turn runs the
+   * full offer→accept→arm path with its native dialog.
+   *
+   * Like every private topic this reaches EVERY session of this user,
+   * including ones not in the call — receivers scope to the live call and
+   * to `sharerId === client.user.id`.
+   */
+  callControlRequest: [
+    detail: { channelId: string; requesterId: string; sharerId: string },
+  ];
+
   userSlowmodes: [];
 
   /**
