@@ -230,6 +230,40 @@ export type Events = {
   ];
 
   /**
+   * A batch of annotation strokes drawn on a screen-sharer's surface
+   * (private topic, fanned to the call's members). Both identities are
+   * server-resolved; the sharer's draw-consent allowlist was enforced
+   * server-side. Stroke points are fixed-point integers 0..=10000 over the
+   * surface's unit square. Reaches EVERY session of this user — the voice
+   * store scopes to the active call. Attribution is server-ASSERTED, not
+   * transport-proven: never present it as verified.
+   */
+  callAnnotation: [
+    detail: {
+      channelId: string;
+      annotatorIdentity: string;
+      annotatorId: string;
+      targetIdentity: string;
+      targetId: string;
+      strokes: { points: number[]; color: number; width: number }[];
+      seq: number;
+    },
+  ];
+
+  /**
+   * A sharer's draw-consent allowlist changed. `allowed` is the COMPLETE
+   * new list; empty means revoked — drop that sharer's strokes at once and
+   * hide the draw affordance.
+   */
+  callAnnotationConsent: [
+    detail: {
+      channelId: string;
+      sharerId: string;
+      allowed: string[];
+    },
+  ];
+
+  /**
    * A sharer offered this user remote control of their machine (private
    * topic; the target only). Ships dark behind the server's
    * `remote_control` feature flag.

@@ -387,6 +387,41 @@ type ServerMessage =
       text: string;
       lang: string;
     }
+  | {
+      type: "CallAnnotation";
+      channel_id: string;
+      /**
+       * Annotator's SFU identity, resolved server-side. The server ASSERTS
+       * attribution — it stops a CLIENT drawing in someone else's name, but
+       * is not something the transport can prove end-to-end; UI copy must
+       * present it as "who the server says is drawing".
+       */
+      annotator_identity: string;
+      annotator_id: string;
+      /** The screen-sharer whose surface is drawn on (server-validated). */
+      target_identity: string;
+      target_id: string;
+      /**
+       * Polylines normalized to the shared surface's content box: flattened
+       * x,y pairs as FIXED-POINT integers 0..=10000 over the unit square
+       * (divide by 10000), with palette + width CLASS indexes (raw colors
+       * never cross the wire).
+       */
+      strokes: { points: number[]; color: number; width: number }[];
+      seq: number;
+    }
+  | {
+      type: "CallAnnotationConsent";
+      channel_id: string;
+      sharer_id: string;
+      /**
+       * The sharer's COMPLETE new draw allowlist. Empty means revoked:
+       * drop that sharer's rendered strokes immediately and hide the draw
+       * affordance — the one-action revoke is the phishing backstop, not
+       * the fade.
+       */
+      allowed: string[];
+    }
   | { type: "MessageScheduled"; message: ScheduledMessageData }
   | { type: "MessageScheduleCancelled"; id: string; channel: string }
   | {
@@ -1663,6 +1698,31 @@ export async function handleEvent(
         userId: event.user_id,
         text: event.text,
         lang: event.lang,
+      });
+      break;
+    }
+    case "CallAnnotation": {
+      // A batch of ink drawn on a screen-sharer's surface. OTHER-addressed
+      // (unlike captions): both identities are server-resolved and the
+      // sharer's consent allowlist was enforced server-side before this
+      // fanned out. Transient — the voice store renders and fades it, only
+      // while this client is in that call.
+      client.emit("callAnnotation", {
+        channelId: event.channel_id,
+        annotatorIdentity: event.annotator_identity,
+        annotatorId: event.annotator_id,
+        targetIdentity: event.target_identity,
+        targetId: event.target_id,
+        strokes: event.strokes,
+        seq: event.seq,
+      });
+      break;
+    }
+    case "CallAnnotationConsent": {
+      client.emit("callAnnotationConsent", {
+        channelId: event.channel_id,
+        sharerId: event.sharer_id,
+        allowed: event.allowed,
       });
       break;
     }

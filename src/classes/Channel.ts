@@ -1614,6 +1614,105 @@ export class Channel {
   }
 
   /**
+   * Relay a batch of annotation strokes onto a screen-sharer's surface.
+   * The server stamps the annotator from the session, validates the target
+   * is a live screen-sharer here, and REFUSES (403) unless the target's
+   * draw-consent allowlist names this user — consent is server-enforced,
+   * never a client toggle. Stroke points are fixed-point integers 0..=10000
+   * over the surface's unit square; color/width are palette and class
+   * INDEXES. Raw fetch for the `sendCaption` reason (the typed client
+   * would drop the body on an unknown route).
+   *
+   * @returns response.ok — false signals the send was refused (e.g. consent
+   * revoked mid-draw), so the capture surface can stop cleanly.
+   */
+  async sendAnnotation(
+    targetId: string,
+    strokes: { points: number[]; color: number; width: number }[],
+    seq: number,
+  ): Promise<boolean> {
+    const client = this.#collection.client;
+    const [headerKey, headerValue] = client.authenticationHeader;
+    const response = await fetch(
+      `${client.options.baseURL}/channels/${this.id}/annotations`,
+      {
+        method: "POST",
+        headers: {
+          [headerKey]: headerValue,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ target: targetId, strokes, seq }),
+      },
+    );
+    return response.ok;
+  }
+
+  /**
+   * Let one named call participant draw on MY shared screen (the caller
+   * must be publishing screen video). Off by default; each grant names
+   * exactly one person. The server fans a `CallAnnotationConsent` event
+   * with the complete new allowlist.
+   */
+  async allowAnnotator(userId: string): Promise<boolean> {
+    const client = this.#collection.client;
+    const [headerKey, headerValue] = client.authenticationHeader;
+    const response = await fetch(
+      `${client.options.baseURL}/channels/${this.id}/annotations/allow`,
+      {
+        method: "PUT",
+        headers: {
+          [headerKey]: headerValue,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ user: userId }),
+      },
+    );
+    return response.ok;
+  }
+
+  /**
+   * The ONE-ACTION revoke: clear my entire draw allowlist at once. This —
+   * not the stroke fade — is the backstop against a live phishing overlay,
+   * and it works whether or not I am still sharing.
+   */
+  async revokeAnnotators(): Promise<boolean> {
+    const client = this.#collection.client;
+    const [headerKey, headerValue] = client.authenticationHeader;
+    const response = await fetch(
+      `${client.options.baseURL}/channels/${this.id}/annotations/allow`,
+      {
+        method: "DELETE",
+        headers: { [headerKey]: headerValue },
+      },
+    );
+    return response.ok;
+  }
+
+  /**
+   * Fetch the call's current draw-consent state (sharers with a non-empty
+   * allowlist) — lets a late joiner render the draw affordance without
+   * having seen the consent events.
+   */
+  async fetchAnnotationConsent(): Promise<
+    { sharer_id: string; allowed: string[] }[]
+  > {
+    const client = this.#collection.client;
+    const [headerKey, headerValue] = client.authenticationHeader;
+    const response = await fetch(
+      `${client.options.baseURL}/channels/${this.id}/annotations/allow`,
+      {
+        method: "GET",
+        headers: { [headerKey]: headerValue },
+      },
+    );
+    if (!response.ok) return [];
+    const body = (await response.json()) as {
+      sharers?: { sharer_id: string; allowed: string[] }[];
+    };
+    return Array.isArray(body.sharers) ? body.sharers : [];
+  }
+
+  /**
    * Announce that this client can RECEIVE remote control in this call
    * (pass-the-controller capability beacon). Marks the caller's voice state
    * `rc_capable` for the channel — advisory routing for rotation-queue UIs,
