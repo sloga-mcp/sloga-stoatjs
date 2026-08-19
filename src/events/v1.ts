@@ -37,6 +37,7 @@ import { ServerRole } from "../classes/ServerRole.js";
 import type { ThreadChannelData } from "../classes/Thread.js";
 import { VoiceParticipant } from "../classes/VoiceParticipant.js";
 import { UNREAD_COUNT_CAP } from "../hydration/channelUnread.js";
+import type { WatchSessionData } from "../lib/watch.js";
 import { hydrate } from "../hydration/index.js";
 
 /**
@@ -421,6 +422,24 @@ type ServerMessage =
        * the fade.
        */
       allowed: string[];
+    }
+  | {
+      /**
+       * A voice channel's watch-together session was created or changed —
+       * the COMPLETE session every time (private topic, call members only).
+       * Apply iff `session.seq` is greater than the last applied for the
+       * same `session.id`.
+       */
+      type: "WatchSessionUpdate";
+      channel_id: string;
+      session: WatchSessionData;
+    }
+  | {
+      /** The watch-together session ended (host stopped/left, call ended,
+       * moderator). Tear the player down regardless of `id`. */
+      type: "WatchSessionEnd";
+      channel_id: string;
+      id: string;
     }
   | { type: "MessageScheduled"; message: ScheduledMessageData }
   | { type: "MessageScheduleCancelled"; id: string; channel: string }
@@ -1723,6 +1742,22 @@ export async function handleEvent(
         channelId: event.channel_id,
         sharerId: event.sharer_id,
         allowed: event.allowed,
+      });
+      break;
+    }
+    case "WatchSessionUpdate": {
+      // Private topic: reaches every session of this user; the store drops
+      // anything not for the call it is connected to.
+      client.emit("watchSessionUpdate", {
+        channelId: event.channel_id,
+        session: event.session,
+      });
+      break;
+    }
+    case "WatchSessionEnd": {
+      client.emit("watchSessionEnd", {
+        channelId: event.channel_id,
+        id: event.id,
       });
       break;
     }

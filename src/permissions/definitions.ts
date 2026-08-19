@@ -92,6 +92,11 @@ export const Permission = {
   /// SERVER channels — DMs and group DMs gate on the instance config flag
   /// alone. Auto-granted to owners/staff via GrantAllSafe.
   UseRemoteControl: 2n ** 41n,
+  /// Start and drive a watch-together session in a voice call. Gates
+  /// starting/controlling only — viewing is Connect-only; server channels
+  /// only (DMs/groups do not consult it). In DEFAULT_PERMISSION and
+  /// backfilled onto existing servers by backend migration 68.
+  UseWatchTogether: 2n ** 43n,
 
   // * Mention permissions
   /// Mention @everyone or @online
@@ -100,8 +105,9 @@ export const Permission = {
   MentionRoles: 2n ** 38n,
 
   // * Misc. permissions
-  // % Bits 42 to 52: free area
-  // % (39 = BypassSlowmode, 40 = UseSoundboard, 41 = UseRemoteControl)
+  // % Bits 44 to 52: free area
+  // % (39 = BypassSlowmode, 40 = UseSoundboard, 41 = UseRemoteControl,
+  // %  42 = RecordCall [editor row only], 43 = UseWatchTogether)
   // % Bits 53 to 64: do not use
 
   // * Grant all permissions
@@ -139,7 +145,8 @@ export const DEFAULT_PERMISSION =
   Permission.Speak +
   Permission.Video +
   Permission.Listen +
-  Permission.UseSoundboard;
+  Permission.UseSoundboard +
+  Permission.UseWatchTogether;
 
 /**
  * Permissions in saved messages channel

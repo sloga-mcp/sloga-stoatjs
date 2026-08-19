@@ -264,6 +264,21 @@ export type Events = {
   ];
 
   /**
+   * A voice channel's watch-together session was created or its control
+   * state changed — the COMPLETE session (private topic; reaches every
+   * session of this user, so receivers scope to the call they are in).
+   */
+  watchSessionUpdate: [
+    detail: {
+      channelId: string;
+      session: import("./lib/watch.js").WatchSessionData;
+    },
+  ];
+
+  /** The watch-together session in a voice channel ended. */
+  watchSessionEnd: [detail: { channelId: string; id: string }];
+
+  /**
    * A sharer offered this user remote control of their machine (private
    * topic; the target only). Ships dark behind the server's
    * `remote_control` feature flag.

@@ -38,6 +38,12 @@ import type {
 } from "./Forum.js";
 import type { ChannelFollowData } from "./ChannelFollow.js";
 import type { ApplicationCommandData } from "./Interaction.js";
+import type {
+  DataWatchUpdate,
+  WatchMediaData,
+  WatchResult,
+  WatchSessionResponse,
+} from "../lib/watch.js";
 import type { DataPollCreate } from "./Poll.js";
 import type { DataSoftResCreate } from "./SoftRes.js";
 import type { ScheduledMessageData } from "./ScheduledMessage.js";
@@ -1710,6 +1716,85 @@ export class Channel {
       sharers?: { sharer_id: string; allowed: string[] }[];
     };
     return Array.isArray(body.sharers) ? body.sharers : [];
+  }
+
+  /**
+   * Watch together (synced playback in this voice call). Sloga carries
+   * ONLY the control state — item, position, playing, host — over these
+   * routes and private events; the media itself is fetched by each viewer
+   * from the provider (YouTube embed, their own Jellyfin) on their own
+   * machine. Raw `fetch`, NOT the typed client: these routes are absent
+   * from stoat-api's tables and the typed client drops unknown bodies.
+   *
+   * All four return the same shape so the store can derive its clock
+   * offset from `server_now` + the local send/receive timestamps.
+   */
+  async #watchRequest(
+    method: "GET" | "POST" | "PATCH" | "DELETE",
+    body?: unknown,
+  ): Promise<WatchResult> {
+    const client = this.#collection.client;
+    const [headerKey, headerValue] = client.authenticationHeader;
+    const sentAt = Date.now();
+    let response: Response;
+    try {
+      response = await fetch(`${client.options.baseURL}/channels/${this.id}/watch`, {
+        method,
+        headers: {
+          [headerKey]: headerValue,
+          ...(body !== undefined ? { "Content-Type": "application/json" } : {}),
+        },
+        body: body !== undefined ? JSON.stringify(body) : undefined,
+      });
+    } catch {
+      return { ok: false, status: 0, error: "NetworkError" };
+    }
+    const receivedAt = Date.now();
+    if (!response.ok) {
+      let error = `HTTP ${response.status}`;
+      try {
+        const e = (await response.json()) as { type?: string };
+        if (e?.type) error = e.type;
+      } catch {
+        /* no body */
+      }
+      return { ok: false, status: response.status, error };
+    }
+    if (response.status === 204) {
+      // DELETE — no session comes back; callers only check `ok`.
+      return {
+        ok: true,
+        body: undefined as unknown as WatchSessionResponse,
+        sentAt,
+        receivedAt,
+      };
+    }
+    return {
+      ok: true,
+      body: (await response.json()) as WatchSessionResponse,
+      sentAt,
+      receivedAt,
+    };
+  }
+
+  /** Start a watch-together session with the caller as host (paused at 0). */
+  startWatch(media: WatchMediaData): Promise<WatchResult> {
+    return this.#watchRequest("POST", { media });
+  }
+
+  /** Host control write / heartbeat — the FULL host-owned state. */
+  updateWatch(data: DataWatchUpdate): Promise<WatchResult> {
+    return this.#watchRequest("PATCH", data);
+  }
+
+  /** End the session (host or channel manager). Idempotent. */
+  endWatch(): Promise<WatchResult> {
+    return this.#watchRequest("DELETE");
+  }
+
+  /** Current session, for late joiners / reconnects. 404 → `ok: false`. */
+  fetchWatch(): Promise<WatchResult> {
+    return this.#watchRequest("GET");
   }
 
   /**
