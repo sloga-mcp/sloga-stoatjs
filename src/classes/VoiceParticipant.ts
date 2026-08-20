@@ -41,6 +41,15 @@ export class VoiceParticipant {
    * be rendered as unknown, never as "cannot take control".
    */
   readonly isRcCapable: Accessor<boolean>;
+  /**
+   * True while this participant has the channel's watch-together session
+   * attached — "in the watch party".
+   *
+   * A self-report the server relays — see `UserVoiceState.watching`. False
+   * also covers "hasn't said" (older clients never claim it), so absence
+   * must render as no hint, never as "refusing to watch".
+   */
+  readonly isWatching: Accessor<boolean>;
 
   #setReceiving: Setter<boolean>;
   #setPublishing: Setter<boolean>;
@@ -49,6 +58,7 @@ export class VoiceParticipant {
   #setScreenVideo: Setter<boolean>;
   #setRecording: Setter<boolean>;
   #setRcCapable: Setter<boolean>;
+  #setWatching: Setter<boolean>;
 
   /**
    * Construct Server Ban
@@ -92,6 +102,10 @@ export class VoiceParticipant {
     const [isRcCapable, setRcCapable] = createSignal(data.rc_capable ?? false);
     this.isRcCapable = isRcCapable;
     this.#setRcCapable = setRcCapable;
+
+    const [isWatching, setWatching] = createSignal(data.watching ?? false);
+    this.isWatching = isWatching;
+    this.#setWatching = setWatching;
   }
 
   /**
@@ -125,6 +139,10 @@ export class VoiceParticipant {
 
     if (typeof data.rc_capable === "boolean") {
       this.#setRcCapable(data.rc_capable);
+    }
+
+    if (typeof data.watching === "boolean") {
+      this.#setWatching(data.watching);
     }
   }
 }

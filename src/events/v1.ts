@@ -529,6 +529,18 @@ export type UserVoiceState = {
    * queue; the server neither verifies nor acts on it.
    */
   rc_capable?: boolean;
+  /**
+   * True while this participant has the channel's watch-together session
+   * attached. Additive field — treat missing as false.
+   *
+   * A SELF-REPORT like `recording`: the player runs in the participant's
+   * client. A bare roster boolean — WHAT is being watched stays on the
+   * private watch fan-out; this only says "in a watch party", which is what
+   * lets the channel list hint at one without joining the call. The server
+   * refuses the claim while the channel has no session and clears it for
+   * every member when the session ends.
+   */
+  watching?: boolean;
 };
 
 /**

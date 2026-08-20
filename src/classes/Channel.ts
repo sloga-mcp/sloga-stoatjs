@@ -1730,15 +1730,16 @@ export class Channel {
    * offset from `server_now` + the local send/receive timestamps.
    */
   async #watchRequest(
-    method: "GET" | "POST" | "PATCH" | "DELETE",
+    method: "GET" | "POST" | "PATCH" | "DELETE" | "PUT",
     body?: unknown,
+    suffix = "",
   ): Promise<WatchResult> {
     const client = this.#collection.client;
     const [headerKey, headerValue] = client.authenticationHeader;
     const sentAt = Date.now();
     let response: Response;
     try {
-      response = await fetch(`${client.options.baseURL}/channels/${this.id}/watch`, {
+      response = await fetch(`${client.options.baseURL}/channels/${this.id}/watch${suffix}`, {
         method,
         headers: {
           [headerKey]: headerValue,
@@ -1795,6 +1796,41 @@ export class Channel {
   /** Current session, for late joiners / reconnects. 404 → `ok: false`. */
   fetchWatch(): Promise<WatchResult> {
     return this.#watchRequest("GET");
+  }
+
+  /**
+   * Hand the watch session to a new host (host or channel manager). The
+   * target must be in the call and, in server channels, hold
+   * `UseWatchTogether`. NOTE: unlike the session GET, a `NotInVoiceChannel`
+   * here refers to the TARGET and is a real refusal — callers must not
+   * apply the self-join retry-once rule to it.
+   */
+  watchHost(user: string): Promise<WatchResult> {
+    return this.#watchRequest("PUT", { user }, "/host");
+  }
+
+  /**
+   * Set or clear the caller's `watching` roster flag — "this client has the
+   * channel's watch session attached". A bare boolean on the channel topic
+   * (the `recording`/`screensharing` visibility class); what is being
+   * watched stays on the private watch fan-out. The server refuses `true`
+   * while the channel has no session and clears the flag for everyone when
+   * the session ends, so callers treat this as best-effort advisory state.
+   *
+   * Raw fetch for the `announceRcCapable` reason: routes absent from
+   * stoat-api's generated tables get their body replaced with `{}`.
+   */
+  async setWatching(watching: boolean): Promise<void> {
+    const client = this.#collection.client;
+    const [headerKey, headerValue] = client.authenticationHeader;
+    await fetch(`${client.options.baseURL}/channels/${this.id}/watching`, {
+      method: "PUT",
+      headers: {
+        [headerKey]: headerValue,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ watching }),
+    });
   }
 
   /**
