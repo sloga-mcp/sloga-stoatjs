@@ -24,7 +24,11 @@ import type { Client } from "../Client.js";
 import type { EventData, EventRsvpData } from "../classes/CalendarEvent.js";
 import type { ChannelFollowData } from "../classes/ChannelFollow.js";
 import type { E2EEClientMessage, E2EEServerEvent } from "../classes/E2EE.js";
-import type { InteractionCreateEvent } from "../classes/Interaction.js";
+import type {
+  CommandChoice,
+  InteractionCreateEvent,
+  ModalData,
+} from "../classes/Interaction.js";
 import { MessageEmbed } from "../classes/MessageEmbed.js";
 import type { PollAnswerCountData } from "../classes/Poll.js";
 import {
@@ -323,6 +327,17 @@ type ServerMessage =
   | { type: "CalendarEventRsvp"; rsvp: EventRsvpData }
   | { type: "InteractionCreate"; interaction: InteractionCreateEvent }
   | { type: "InteractionEphemeralMessage"; message: Message }
+  | {
+      type: "InteractionAutocompleteResult";
+      interaction_id: string;
+      choices: CommandChoice[];
+    }
+  | {
+      type: "InteractionModalOpen";
+      interaction_id: string;
+      source_id: string;
+      modal: ModalData;
+    }
   | {
       type: "PollVoteUpdate";
       id: string;
@@ -1522,6 +1537,27 @@ export async function handleEvent(
       // Bot-facing (this event only arrives on the bot's own private topic;
       // it carries the single-use response token). Transient — no collection.
       client.emit("interactionCreate", event.interaction);
+      break;
+    }
+    case "InteractionAutocompleteResult": {
+      // Suggestions for the option this user is typing (own private topic).
+      // Transient — no collection; the composer correlates on interaction_id
+      // and drops anything the caret has already moved past.
+      client.emit("interactionAutocompleteResult", {
+        interaction_id: event.interaction_id,
+        choices: event.choices,
+      });
+      break;
+    }
+    case "InteractionModalOpen": {
+      // A bot asked this user for a form (own private topic). Transient —
+      // no collection; interaction_id is a fresh interaction to submit
+      // against, source_id resolves whatever invocation is still pending.
+      client.emit("interactionModalOpen", {
+        interaction_id: event.interaction_id,
+        source_id: event.source_id,
+        modal: event.modal,
+      });
       break;
     }
     case "InteractionEphemeralMessage": {

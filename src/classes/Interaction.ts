@@ -26,6 +26,11 @@ export interface CommandOptionData {
   kind: CommandOptionKind;
   required?: boolean;
   choices?: CommandChoice[];
+  /**
+   * Ask the bot for suggestions as the user types this option
+   * (String/Integer only, and mutually exclusive with `choices`).
+   */
+  autocomplete?: boolean;
 }
 
 /** A slash command registered by a bot (`v0::ApplicationCommand`). */
@@ -98,6 +103,59 @@ export interface ActionRowData {
   components: ComponentData[];
 }
 
+// ----- Modals (slice 3) --------------------------------------------------------
+
+/** Visual style of a modal text input. */
+export type TextInputStyle = "Short" | "Paragraph";
+
+/** One text field on a modal (`v0::ModalTextInput`). */
+export interface ModalTextInputData {
+  custom_id: string;
+  label: string;
+  style: TextInputStyle;
+  required?: boolean;
+  min_length?: number;
+  max_length?: number;
+  placeholder?: string;
+  /** Value the field opens with. */
+  value?: string;
+}
+
+/**
+ * A form a bot asks the invoking user to fill in (`v0::Modal`).
+ *
+ * Inputs are a flat list, not component rows: a modal only ever holds text
+ * inputs, one per row, so rows would carry no information.
+ */
+export interface ModalData {
+  custom_id: string;
+  title: string;
+  inputs: ModalTextInputData[];
+}
+
+/**
+ * Wire payload of the `InteractionAutocompleteResult` event.
+ *
+ * Delivered ONLY to the user who is typing.
+ */
+export interface AutocompleteResultEvent {
+  interaction_id: string;
+  choices: CommandChoice[];
+}
+
+/**
+ * Wire payload of the `InteractionModalOpen` event.
+ *
+ * Delivered ONLY to the user the form is for. `interaction_id` is a FRESH
+ * interaction to submit the completed form against; `source_id` is the
+ * interaction that opened it, so a pending invocation can be resolved.
+ */
+export interface ModalOpenEvent {
+  interaction_id: string;
+  source_id: string;
+  modal: ModalData;
+}
+
 /**
  * Wire payload of the `InteractionCreate` event (`v0::Interaction`).
  *
@@ -118,7 +176,14 @@ export interface InteractionCreateEvent {
   custom_id?: string;
   /** Submitted select values (Component kind, selects only). */
   values?: string[];
+  /**
+   * Supplied option values. Schema-validated for Command; whatever has been
+   * typed so far for Autocomplete; submitted fields keyed by input id for
+   * ModalSubmit.
+   */
   options?: Record<string, string>;
+  /** Option the user is currently typing (Autocomplete kind). */
+  focused_option?: string;
   token: string;
 }
 
@@ -177,5 +242,65 @@ export async function respondToInteraction(
         ...(options?.ephemeral ? { ephemeral: true } : {}),
       },
     },
+  );
+}
+
+/**
+ * Answer an autocomplete interaction with suggestions.
+ *
+ * Bot-facing helper. An empty list is a valid answer meaning "nothing
+ * matches". Autocomplete interactions expire after one minute rather than
+ * fifteen — by then the caret has moved on.
+ */
+export async function respondWithAutocomplete(
+  client: Client,
+  interactionId: string,
+  token: string,
+  choices: CommandChoice[],
+): Promise<unknown> {
+  return await client.channels.apiReq(
+    "POST",
+    `/interactions/${interactionId}/autocomplete`,
+    { body: { token, choices } },
+  );
+}
+
+/**
+ * Answer an interaction by asking the invoking user to fill in a form.
+ *
+ * Bot-facing helper. This CONSUMES the interaction's single response slot,
+ * so it is an alternative to {@link respondToInteraction}, not something to
+ * do as well. The completed form arrives as a fresh `interactionCreate` of
+ * kind `ModalSubmit`, with its own token.
+ */
+export async function respondWithModal(
+  client: Client,
+  interactionId: string,
+  token: string,
+  modal: ModalData,
+): Promise<unknown> {
+  return await client.channels.apiReq(
+    "POST",
+    `/interactions/${interactionId}/modal`,
+    { body: { token, modal } },
+  );
+}
+
+/**
+ * Submit a filled-in form.
+ *
+ * User-facing, unlike its neighbours: this is authenticated by the session
+ * of the person the form was shown to, and takes no interaction token. The
+ * values are keyed by text input id.
+ */
+export async function submitModal(
+  client: Client,
+  interactionId: string,
+  values: Record<string, string>,
+): Promise<unknown> {
+  return await client.channels.apiReq(
+    "POST",
+    `/interactions/${interactionId}/modal-submit`,
+    { body: { values } },
   );
 }

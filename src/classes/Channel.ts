@@ -1292,6 +1292,38 @@ export class Channel {
   }
 
   /**
+   * Ask a command's bot to suggest values for the option being typed.
+   *
+   * Only valid for options registered with `autocomplete`. Nothing is posted
+   * to the channel: this spends no slowmode and joins no thread, and the
+   * suggestions arrive on this user's own private topic as an
+   * `interactionAutocompleteResult` event.
+   * @param commandId Id of the command being composed
+   * @param focusedOption Name of the option the caret is in
+   * @param options Everything typed so far, keyed by option name — partial
+   *   by definition, so the server does not schema-check these values
+   * @returns Id of the created interaction, to correlate the result against
+   */
+  async autocompleteOption(
+    commandId: string,
+    focusedOption: string,
+    options?: Record<string, string>,
+  ): Promise<string> {
+    const response = (await this.#collection.apiReq(
+      "POST",
+      `/channels/${this.id}/interactions/autocomplete`,
+      {
+        body: {
+          command_id: commandId,
+          focused_option: focusedOption,
+          options: options ?? {},
+        },
+      },
+    )) as { interaction_id: string };
+    return response.interaction_id;
+  }
+
+  /**
    * Interact with a component (button / select) on a bot message in this
    * channel
    * @param messageId Message the component lives on

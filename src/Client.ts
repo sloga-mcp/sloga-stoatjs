@@ -12,7 +12,11 @@ import type { ChannelFollowData } from "./classes/ChannelFollow.js";
 import type { DiscordImportJobData } from "./classes/DiscordImport.js";
 import type { E2EEAdapter } from "./classes/E2EE.js";
 import type { Emoji } from "./classes/Emoji.js";
-import type { InteractionCreateEvent } from "./classes/Interaction.js";
+import type {
+  AutocompleteResultEvent,
+  InteractionCreateEvent,
+  ModalOpenEvent,
+} from "./classes/Interaction.js";
 import type { Message } from "./classes/Message.js";
 import type { ScheduledMessageData } from "./classes/ScheduledMessage.js";
 import type {
@@ -154,6 +158,20 @@ export type Events = {
    * `messageCreate` so message lists render it.
    */
   interactionEphemeral: [message: Message];
+
+  /**
+   * Suggestions a bot returned for the command option this user is typing
+   * (private topic; transient). Correlate on `interaction_id` and discard
+   * results for a request the caret has already moved past.
+   */
+  interactionAutocompleteResult: [result: AutocompleteResultEvent];
+
+  /**
+   * A bot asked this user to fill in a form (private topic; transient).
+   * Carries a FRESH interaction id to submit against — see
+   * {@link submitModal}.
+   */
+  interactionModalOpen: [open: ModalOpenEvent];
 
   /** This user scheduled a message (private topic; author-only). */
   scheduledMessageCreate: [row: ScheduledMessageData];
