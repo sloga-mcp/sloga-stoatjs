@@ -1089,6 +1089,9 @@ export async function handleEvent(
               case "Icon":
                 changes["icon"] = undefined;
                 break;
+              case "VoiceRegion" as string:
+                changes["voiceRegion"] = undefined;
+                break;
             }
           }
         }

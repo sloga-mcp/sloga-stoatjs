@@ -202,6 +202,15 @@ export class Server {
   }
 
   /**
+   * Preferred voice node for this server's voice channels (a node name
+   * advertised under `features.livekit.nodes`); `undefined` = automatic.
+   * Only decides where a room is OPENED — a live room keeps its node.
+   */
+  get voiceRegion(): string | undefined {
+    return this.#collection.getUnderlyingObject(this.id).voiceRegion;
+  }
+
+  /**
    * Whether this server is marked as mature
    */
   get mature(): boolean {

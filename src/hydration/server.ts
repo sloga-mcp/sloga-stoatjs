@@ -34,11 +34,13 @@ export type HydratedServer = {
   discoverable: boolean;
   discoveryRequested: boolean;
   nsfw: boolean;
+  /** Preferred voice node name; `undefined` = automatic (lowest latency) */
+  voiceRegion?: string;
 };
 
 export const serverHydration: Hydrate<
-  // `discovery_requested` is additive; stoat-api predates it.
-  APIServer & { discovery_requested?: boolean },
+  // `discovery_requested` / `voice_region` are additive; stoat-api predates them.
+  APIServer & { discovery_requested?: boolean; voice_region?: string },
   HydratedServer
 > = {
   keyMapping: {
@@ -48,6 +50,7 @@ export const serverHydration: Hydrate<
     system_messages: "systemMessages",
     default_permissions: "defaultPermissions",
     discovery_requested: "discoveryRequested",
+    voice_region: "voiceRegion",
   },
   functions: {
     id: (server) => server._id,
@@ -72,10 +75,12 @@ export const serverHydration: Hydrate<
     discoverable: (server) => server.discoverable || false,
     discoveryRequested: (server) => server.discovery_requested || false,
     nsfw: (server) => server.nsfw || false,
+    voiceRegion: (server) => server.voice_region ?? undefined,
   },
   initialHydration: () => ({
     channelIds: new ReactiveSet(),
     roles: new ReactiveMap(),
+    voiceRegion: undefined,
   }),
 };
 
