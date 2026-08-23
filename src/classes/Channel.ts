@@ -57,6 +57,21 @@ import { VoiceParticipant } from "./VoiceParticipant.js";
 const soundboardThrottle = new Map<string, number>();
 
 /**
+ * What the server hands back for any LiveKit participant it mints
+ * (`CreateVoiceUserResponse`). Defined locally: stoat-api 0.13.5's route table
+ * predates the screen-leg route, so it goes through `apiReq`.
+ *
+ * The token is short-lived (10 s) by design — mint it immediately before
+ * connecting, never ahead of a user-paced dialog.
+ */
+export type VoiceTokenResponse = {
+  /** Token for authenticating with the voice server */
+  token: string;
+  /** Url of the LiveKit server to connect to */
+  url: string;
+};
+
+/**
  * Channel Class
  */
 export class Channel {
@@ -1557,6 +1572,45 @@ export class Channel {
       // so cast back to the pre-field body type to satisfy the compiler.
       (deviceId ? { ...body, device_id: deviceId } : body) as typeof body,
     );
+  }
+
+  /**
+   * Mint a token for this device's native SCREEN LEG — a second, publish-only
+   * LiveKit participant at identity `{user_id}:{device_id}:screen`.
+   *
+   * Android has no way to screen-share from the WebView: no web runtime on the
+   * platform exposes `getDisplayMedia`, and a native MediaProjection capture
+   * cannot be handed to the WebView's sealed WebRTC stack as a track. Rejoining
+   * under the SAME identity is not an option either — LiveKit evicts the
+   * earlier connection, so the call itself would drop. Hence a separate
+   * participant, published by the native plugin.
+   *
+   * The caller must already be in the call. The leg's identity is derived from
+   * the LIVE primary mapping server-side, never from `deviceId`: the claim only
+   * proves which device is asking, and the server refuses unless that device is
+   * the one currently holding the call (plan §2.1 step 6 / §0-R.2 — otherwise a
+   * phone that is NOT in the call could mint a leg under the user's desktop
+   * identity and take every viewer's call to mixed).
+   *
+   * @param deviceId E2EE device id of the calling device. Omit only when the
+   *   primary joined without one (a bare, non-E2EE identity), which yields the
+   *   three-segment `{user_id}::screen`.
+   * @returns LiveKit URL and Token for the leg
+   * @throws `FeatureDisabled` while the operator flag is dark, `IsBot`,
+   *   `NotAVoiceChannel`, `NotInVoiceChannel`, `FailedValidation` (the device
+   *   is unregistered, or is not the one in the call), `VideoCallFull`
+   */
+  async joinScreenLeg(deviceId?: string): Promise<VoiceTokenResponse> {
+    // `apiReq`, NOT the typed client: `screen_leg` is absent from stoat-api
+    // 0.13.5's route table, and its generic body mapper drops the body of an
+    // unknown route SILENTLY — the request would arrive with no `device_id`
+    // and be refused as a mismatched device, with nothing in the error to say
+    // why. Same reason as the thread and announcement routes above.
+    return (await this.#collection.apiReq(
+      "POST",
+      `/channels/${this.id}/screen_leg`,
+      { body: { device_id: deviceId } },
+    )) as VoiceTokenResponse;
   }
 
   /**
