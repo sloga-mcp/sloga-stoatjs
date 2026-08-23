@@ -298,6 +298,10 @@ export type Events = {
       targetId: string;
       sharerEphemeralPub: string;
       rcSessionId: string;
+      /** `kbm` or `gamepad`; absent means `kbm`. Display and relay only. */
+      inputClass?: string;
+      /** The sharer's control-protocol version; absent means v1. */
+      protocolVersion?: number;
     },
   ];
 
@@ -324,6 +328,10 @@ export type Events = {
       sharerId: string;
       controllerId: string;
       controllerEphemeralPub: string;
+      /** The controller's control-protocol version; absent means v1. */
+      controllerProtocolVersion?: number;
+      /** The input class the controller bound; absent means `kbm`. */
+      controllerInputClass?: string;
     },
   ];
 

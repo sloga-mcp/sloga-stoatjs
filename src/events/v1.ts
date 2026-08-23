@@ -239,6 +239,18 @@ type ServerMessage =
       target_id: string;
       sharer_ephemeral_pub: string;
       rc_session_id: string;
+      /**
+       * Which class of input the session carries (`kbm` or `gamepad`).
+       * Absent means `kbm` — every client that predates the class. Relayed
+       * verbatim; the two ends bind it into their own key transcript and
+       * this copy is never the authority.
+       */
+      input_class?: string;
+      /**
+       * Control-protocol version the sharer speaks. Absent means v1, which
+       * is exactly the set of builds that cannot send the field.
+       */
+      protocol_version?: number;
     }
   | {
       /** A control offer was declined. PRIVATE topic — the sharer only. */
@@ -261,6 +273,13 @@ type ServerMessage =
       sharer_id: string;
       controller_id: string;
       controller_ephemeral_pub: string;
+      /** Control-protocol version the controller speaks. Absent means v1. */
+      controller_protocol_version?: number;
+      /**
+       * The input class the controller actually bound, echoed back so the
+       * sharer can compare it against the class its own offer pinned.
+       */
+      controller_input_class?: string;
     }
   | {
       /**
@@ -1427,6 +1446,8 @@ export async function handleEvent(
         targetId: event.target_id,
         sharerEphemeralPub: event.sharer_ephemeral_pub,
         rcSessionId: event.rc_session_id,
+        inputClass: event.input_class,
+        protocolVersion: event.protocol_version,
       });
       break;
     }
@@ -1449,6 +1470,8 @@ export async function handleEvent(
         sharerId: event.sharer_id,
         controllerId: event.controller_id,
         controllerEphemeralPub: event.controller_ephemeral_pub,
+        controllerProtocolVersion: event.controller_protocol_version,
+        controllerInputClass: event.controller_input_class,
       });
       break;
     }
