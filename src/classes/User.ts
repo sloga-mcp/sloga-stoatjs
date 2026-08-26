@@ -1,3 +1,5 @@
+import { batch } from "solid-js";
+
 import type { User as APIUser, DataEditUser, Presence } from "stoat-api";
 import { decodeTime } from "ulid";
 
@@ -97,6 +99,13 @@ export class User {
    */
   get e2eeEnabled(): boolean {
     return this.#collection.getUnderlyingObject(this.id).e2eeEnabled ?? false;
+  }
+
+  /**
+   * Pronouns, if the user set any
+   */
+  get pronouns(): string | undefined {
+    return this.#collection.getUnderlyingObject(this.id).pronouns;
   }
 
   /**
@@ -398,4 +407,83 @@ export class User {
       `/users/${this.id as ""}/mutual`,
     );
   }
+
+  /**
+   * The typed client's request tables predate the respect routes — an
+   * unknown body-carrying route silently serializes `{}` (the
+   * queryMembersExperimental precedent), so ALL respect calls go through
+   * raw fetch.
+   */
+  #rawApi(): { baseURL: string; auth: Record<string, string> } {
+    return this.#collection.client.api as unknown as {
+      baseURL: string;
+      auth: Record<string, string>;
+    };
+  }
+
+  /**
+   * Fetch this user's respect wall (newest-edited first), hydrating the
+   * authors into the user cache so they render for strangers-to-the-viewer.
+   */
+  async fetchRespect(): Promise<{ respect: RespectEntry[]; users: User[] }> {
+    const api = this.#rawApi();
+    const response = await fetch(`${api.baseURL}/users/${this.id}/respect`, {
+      headers: api.auth,
+    });
+    if (!response.ok)
+      throw await response.json().catch(() => new Error(response.statusText));
+    const data = (await response.json()) as {
+      respect: RespectEntry[];
+      users: APIUser[];
+    };
+
+    return batch(() => ({
+      respect: data.respect,
+      users: data.users.map((user) =>
+        this.#collection.client.users.getOrCreate(user._id, user),
+      ),
+    }));
+  }
+
+  /**
+   * Write (or rewrite) your respect on this user's wall. One entry per
+   * author — giving respect again edits your existing entry in place.
+   */
+  async giveRespect(content: string): Promise<RespectEntry> {
+    const api = this.#rawApi();
+    const response = await fetch(`${api.baseURL}/users/${this.id}/respect`, {
+      method: "PUT",
+      headers: { ...api.auth, "Content-Type": "application/json" },
+      body: JSON.stringify({ content }),
+    });
+    if (!response.ok)
+      throw await response.json().catch(() => new Error(response.statusText));
+    return (await response.json()) as RespectEntry;
+  }
+
+  /**
+   * Delete a respect entry from this user's wall by its author. Allowed for
+   * the entry's author and the wall's owner. Idempotent.
+   */
+  async removeRespect(authorId: string): Promise<void> {
+    const api = this.#rawApi();
+    const response = await fetch(
+      `${api.baseURL}/users/${this.id}/respect/${authorId}`,
+      { method: "DELETE", headers: api.auth },
+    );
+    if (!response.ok)
+      throw await response.json().catch(() => new Error(response.statusText));
+  }
 }
+
+/**
+ * A respect wall entry. Newer than the published stoat-api types.
+ */
+export type RespectEntry = {
+  _id: string;
+  target_id: string;
+  author_id: string;
+  content: string;
+  /** ms since epoch, bumped on edit */
+  updated_at: number;
+};

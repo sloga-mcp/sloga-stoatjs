@@ -1272,6 +1272,9 @@ export async function handleEvent(
               case "Connections":
                 changes["connections"] = [];
                 break;
+              case "Pronouns":
+                changes["pronouns"] = undefined;
+                break;
             }
           }
         }

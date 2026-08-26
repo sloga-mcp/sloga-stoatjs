@@ -39,6 +39,8 @@ type APIUserExt = APIUser & {
   connections?: UserConnection[];
   relationship_note?: string;
   profile_visibility?: ProfileVisibility;
+  /** Pronouns are also newer than the published types; absent = unset. */
+  pronouns?: string;
 };
 
 /** Who may fetch the user's profile page */
@@ -49,6 +51,7 @@ export type HydratedUser = {
   username: string;
   discriminator: string;
   displayName?: string;
+  pronouns?: string;
   relationship: RelationshipStatus;
   relationshipNote?: string;
   relations: null;
@@ -82,6 +85,7 @@ export const userHydration: Hydrate<APIUserExt, HydratedUser> = {
     username: (user) => user.username,
     discriminator: (user) => user.discriminator,
     displayName: (user) => user.display_name!,
+    pronouns: (user) => user.pronouns,
     relationship: (user) => user.relationship!,
     // No default: an explicit undefined must CLEAR a stale note when the
     // relationship leaves the pending state (see the UserRelationship
