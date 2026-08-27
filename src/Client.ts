@@ -884,7 +884,7 @@ export class Client extends AsyncEventEmitter<Events> {
     body.append("file", file);
 
     const [key, value] = this.authenticationHeader;
-    const data: { id: string } = await fetch(
+    const res = await fetch(
       `${uploadUrl ?? this.configuration?.features.autumn.url}/${tag}`,
       {
         method: "POST",
@@ -893,8 +893,18 @@ export class Client extends AsyncEventEmitter<Events> {
           [key]: value,
         },
       },
-    ).then((res) => res.json());
+    );
 
+    // A rejection (FileTooLarge, FileTypeNotAllowed, ...) arrives as a JSON
+    // error body, which parses just as happily as a success — so without
+    // this check the caller received `id: undefined`, JSON.stringify dropped
+    // the key from the edit payload, and the save "succeeded" while changing
+    // nothing. Throw the API error object so callers surface it.
+    if (!res.ok) {
+      throw await res.json().catch(() => ({ type: "InternalError" }));
+    }
+
+    const data: { id: string } = await res.json();
     return data.id;
   }
 
