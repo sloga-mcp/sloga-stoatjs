@@ -944,7 +944,7 @@ export class MessageWebhook {
   get avatarURL(): string {
     return (
       this.avatar?.createFileURL() ??
-      `${this.#client.options.baseURL}/users/${this.id}/default_avatar`
+      `${this.#client.options.baseURL}/users/${this.id}/default_avatar?v=2`
     );
   }
 }

@@ -212,7 +212,7 @@ export class User {
   get defaultAvatarURL(): string {
     return `${this.#collection.client.options.baseURL}/users/${
       this.id
-    }/default_avatar`;
+    }/default_avatar?v=2`;
   }
 
   /**
