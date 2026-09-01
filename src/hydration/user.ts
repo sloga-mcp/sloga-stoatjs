@@ -11,11 +11,11 @@ import { File } from "../classes/File.js";
 import type { Hydrate } from "./index.js";
 
 /**
- * A linked streaming channel (Twitch / YouTube), public by design.
+ * A linked streaming channel (Twitch / YouTube / Kick), public by design.
  * Newer than the published stoat-api types.
  */
 export type UserConnection = {
-  platform: "Twitch" | "YouTube";
+  platform: "Twitch" | "YouTube" | "Kick";
   handle: string;
   display_name: string;
   /** Serialized only when true */
