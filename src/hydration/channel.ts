@@ -125,14 +125,25 @@ export const channelHydration: Hydrate<
     lastMessageId: (channel) => channel.last_message_id!,
     slowmode: (channel) => channel.slowmode ?? 0,
     announcement: (channel) => channel.announcement ?? false,
-    voice: (channel) =>
-      !!channel.voice ||
-      channel.channel_type === "DirectMessage" ||
-      channel.channel_type === "Group"
-        ? {
-            maxUsers: channel.voice?.max_users || undefined,
-          }
-        : undefined,
+    // Present exactly while the SERVER would accept a `join_call` here. The
+    // wire object carries `voice` on groups and server text channels, and
+    // with it `disabled` (not in the generated API type yet), which keeps a
+    // saved limit while calling is switched off — the backend's
+    // `Channel::voice()` yields nothing for a disabled or absent entry, so
+    // neither does this. Group calling is owner opt-in server-side: a group
+    // with no `voice` at all is NOT callable, which the previous mapping
+    // inverted by minting a voice object for every group. Direct messages
+    // carry no `voice` field and are always callable; `Channel.isVoice`
+    // answers that from the type, not from this mapper (which only runs for
+    // payloads that carry the key).
+    voice: (channel) => {
+      const voice = channel.voice as
+        | { max_users?: number | null; disabled?: boolean }
+        | null
+        | undefined;
+      if (!voice || voice.disabled) return undefined;
+      return { maxUsers: voice.max_users || undefined };
+    },
     parentChannelId: (channel) => channel.parent_channel,
     originMessageId: (channel) => channel.origin_message_id,
     creatorId: (channel) => channel.creator,

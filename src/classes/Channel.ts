@@ -521,14 +521,22 @@ export class Channel {
   }
 
   /**
-   * Whether this is a 'voice chats v2' channel
+   * Whether calls can be started or joined in this channel — i.e. whether the
+   * server would accept a `join_call` for it.
+   *
+   * Direct messages always can. Groups and server text channels can only
+   * while the server sent voice information that is not switched off: group
+   * calling is owner opt-in server-side, and a saved configuration can be
+   * disabled without being removed. The hydrated `voice` field exists exactly
+   * in that case (see the channel hydration). Reporting every group as
+   * callable — the previous rule — put a call card in groups whose join then
+   * failed with `NotAVoiceChannel`.
    *
    * NB. subject to change as vc(2) goes to production
    */
   get isVoice(): boolean {
     return (
       this.type === "DirectMessage" ||
-      this.type === "Group" ||
       typeof this.#collection.getUnderlyingObject(this.id).voice === "object"
     );
   }
