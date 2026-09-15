@@ -109,6 +109,20 @@ export class ServerMember {
   }
 
   /**
+   * Whether this member is server-muted (may not publish audio or video).
+   */
+  get serverMuted(): boolean {
+    return !this.#collection.getUnderlyingObject(key(this.id)).canPublish;
+  }
+
+  /**
+   * Whether this member is server-deafened (receives no remote media).
+   */
+  get serverDeafened(): boolean {
+    return !this.#collection.getUnderlyingObject(key(this.id)).canReceive;
+  }
+
+  /**
    * Ordered list of roles for this member, from lowest to highest priority.
    */
   get orderedRoles(): ServerRole[] {
@@ -238,6 +252,37 @@ export class ServerMember {
       `/servers/${this.id.server as ""}/members/${this.id.user as ""}`,
       data,
     );
+  }
+
+  /**
+   * Server-mute or un-mute this member.
+   *
+   * Sends the explicit boolean in BOTH directions rather than clearing the
+   * field: `remove: ["CanPublish"]` is the other shape the API accepts, but
+   * it forces every other client to infer the new value, and the server
+   * treats the two paths separately.
+   * @param muted Whether the member may not publish audio or video
+   */
+  async setServerMuted(muted: boolean): Promise<void> {
+    await this.edit({ can_publish: !muted });
+  }
+
+  /**
+   * Server-deafen or un-deafen this member.
+   * @param deafened Whether the member receives no remote media
+   */
+  async setServerDeafened(deafened: boolean): Promise<void> {
+    await this.edit({ can_receive: !deafened });
+  }
+
+  /**
+   * Disconnect this member from the voice channel they are in.
+   *
+   * Clearing `VoiceChannel` is the API's disconnect — it is NOT a server
+   * kick, and the member may rejoin unless something else stops them.
+   */
+  async disconnectFromVoice(): Promise<void> {
+    await this.edit({ remove: ["VoiceChannel"] });
   }
 
   /**

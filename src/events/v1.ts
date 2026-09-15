@@ -1190,6 +1190,15 @@ export async function handleEvent(
               case "Timeout":
                 changes["timeout"] = undefined;
                 break;
+              // Clearing either voice override restores its default, which is
+              // "not muted" / "not deafened". Without these the badge stuck
+              // on for a member un-muted through the `remove` shape.
+              case "CanPublish":
+                changes["canPublish"] = true;
+                break;
+              case "CanReceive":
+                changes["canReceive"] = true;
+                break;
             }
           }
         }
