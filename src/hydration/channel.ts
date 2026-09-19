@@ -58,6 +58,11 @@ export type HydratedChannel = {
   tags?: ForumTag[];
   requireTag: boolean;
   defaultSort?: ForumSortOrder;
+  /**
+   * Default auto-archive duration (minutes) for new posts in this forum.
+   * 0 means never auto-archive; undefined means the server default applies.
+   */
+  defaultAutoArchiveMinutes?: number;
   // Forum-post (thread under a forum) applied tag ids.
   appliedTags?: string[];
 };
@@ -91,6 +96,7 @@ export const channelHydration: Hydrate<
     tags: "tags",
     require_tag: "requireTag",
     default_sort: "defaultSort",
+    default_auto_archive_minutes: "defaultAutoArchiveMinutes",
     applied_tags: "appliedTags",
   },
   functions: {
@@ -157,6 +163,8 @@ export const channelHydration: Hydrate<
     tags: (channel) => channel.tags ?? [],
     requireTag: (channel) => channel.require_tag || false,
     defaultSort: (channel) => channel.default_sort ?? "LatestActivity",
+    defaultAutoArchiveMinutes: (channel) =>
+      channel.default_auto_archive_minutes,
     appliedTags: (channel) => channel.applied_tags ?? [],
   },
   initialHydration: () => ({

@@ -22,7 +22,10 @@ export interface ThreadChannelData {
   /** Server-set only — never accepted from clients. */
   archived?: boolean;
   archived_timestamp?: string;
-  /** One of 60 / 1440 / 4320 / 10080 (minutes). */
+  /**
+   * Inactivity window before auto-archive, in minutes. One of
+   * 0 / 60 / 1440 / 4320 / 10080 / 43200 / 129600; 0 = never auto-archive.
+   */
   auto_archive_minutes?: number;
   locked?: boolean;
   /** Forum-tag ids applied to this thread (forum posts only). */
@@ -35,6 +38,11 @@ export interface ThreadChannelData {
  */
 export interface DataCreateThread {
   name: string;
+  /**
+   * Inactivity window before auto-archive, in minutes. One of
+   * 0 / 60 / 1440 / 4320 / 10080 / 43200 / 129600; 0 = never auto-archive.
+   * Server default is 1440 when omitted.
+   */
   auto_archive_minutes?: number;
 }
 

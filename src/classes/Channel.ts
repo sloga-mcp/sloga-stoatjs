@@ -324,6 +324,15 @@ export class Channel {
   }
 
   /**
+   * Default auto-archive duration in minutes applied to new posts
+   * (forums only; 0 = never; undefined on older servers)
+   */
+  get defaultAutoArchiveMinutes(): number | undefined {
+    return this.#collection.getUnderlyingObject(this.id)
+      .defaultAutoArchiveMinutes;
+  }
+
+  /**
    * Ids of the forum tags applied to this post (forum-post threads only)
    */
   get appliedTags(): string[] {
@@ -385,7 +394,8 @@ export class Channel {
 
   /**
    * Minutes of inactivity after which this thread auto-archives
-   * (threads only; one of 60 / 1440 / 4320 / 10080)
+   * (threads only; one of 0 / 60 / 1440 / 4320 / 10080 / 43200 / 129600;
+   * 0 = never)
    */
   get autoArchiveMinutes(): number | undefined {
     return this.#collection.getUnderlyingObject(this.id).autoArchiveMinutes;

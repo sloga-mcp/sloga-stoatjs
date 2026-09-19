@@ -43,6 +43,12 @@ export interface ForumChannelData {
   tags?: ForumTag[];
   require_tag?: boolean;
   default_sort?: ForumSortOrder;
+  /**
+   * Default auto-archive duration (minutes) for new posts: one of
+   * 0 / 60 / 1440 / 4320 / 10080 / 43200 / 129600; 0 = never. Omitted by
+   * older servers.
+   */
+  default_auto_archive_minutes?: number;
 }
 
 /** Tag definition as submitted through `PATCH /channels/{id}` (`tags`). */
@@ -60,7 +66,10 @@ export interface DataCreateForumPost {
   title: string;
   /** Ids of forum tags applied to this post. */
   tags?: string[];
-  /** One of 60 / 1440 / 4320 / 10080 (minutes), defaults to 1440. */
+  /**
+   * One of 0 / 60 / 1440 / 4320 / 10080 / 43200 / 129600 (minutes); 0 = never.
+   * Omit to use the forum's `default_auto_archive_minutes`.
+   */
   auto_archive_minutes?: number;
   /** Starter message of the post. */
   message: DataMessageSend;
