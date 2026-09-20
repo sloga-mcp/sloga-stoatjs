@@ -22,7 +22,10 @@ export interface ForumTag {
 }
 
 /** Default ordering of a forum's post browse view. */
-export type ForumSortOrder = "LatestActivity" | "CreationDate";
+export type ForumSortOrder =
+  | "LatestActivity"
+  | "CreationDate"
+  | "Alphabetical";
 
 /**
  * Serialized `v0::Channel::Forum` — a sixth channel variant. Posts are
@@ -44,9 +47,14 @@ export interface ForumChannelData {
   require_tag?: boolean;
   default_sort?: ForumSortOrder;
   /**
-   * Default auto-archive duration (minutes) for new posts: one of
-   * 0 / 60 / 1440 / 4320 / 10080 / 43200 / 129600; 0 = never. Omitted by
-   * older servers.
+   * Whether `default_sort` is imposed on every reader rather than being the
+   * order the browse view merely opens on. The server enforces this, so a
+   * `sort` the caller passes to `fetchPosts` is ignored while it is set.
+   */
+  force_sort?: boolean;
+  /**
+   * Default auto-archive duration (minutes) for new posts: 0 = never,
+   * otherwise 1 up to two years (1_051_200). Omitted by older servers.
    */
   default_auto_archive_minutes?: number;
 }
@@ -67,7 +75,7 @@ export interface DataCreateForumPost {
   /** Ids of forum tags applied to this post. */
   tags?: string[];
   /**
-   * One of 0 / 60 / 1440 / 4320 / 10080 / 43200 / 129600 (minutes); 0 = never.
+   * Minutes; 0 = never, otherwise 1 up to two years (1_051_200).
    * Omit to use the forum's `default_auto_archive_minutes`.
    */
   auto_archive_minutes?: number;

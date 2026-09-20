@@ -58,6 +58,8 @@ export type HydratedChannel = {
   tags?: ForumTag[];
   requireTag: boolean;
   defaultSort?: ForumSortOrder;
+  /** Whether `defaultSort` is imposed on every reader of this forum. */
+  forceSort: boolean;
   /**
    * Default auto-archive duration (minutes) for new posts in this forum.
    * 0 means never auto-archive; undefined means the server default applies.
@@ -96,6 +98,7 @@ export const channelHydration: Hydrate<
     tags: "tags",
     require_tag: "requireTag",
     default_sort: "defaultSort",
+    force_sort: "forceSort",
     default_auto_archive_minutes: "defaultAutoArchiveMinutes",
     applied_tags: "appliedTags",
   },
@@ -163,6 +166,7 @@ export const channelHydration: Hydrate<
     tags: (channel) => channel.tags ?? [],
     requireTag: (channel) => channel.require_tag || false,
     defaultSort: (channel) => channel.default_sort ?? "LatestActivity",
+    forceSort: (channel) => channel.force_sort || false,
     defaultAutoArchiveMinutes: (channel) =>
       channel.default_auto_archive_minutes,
     appliedTags: (channel) => channel.applied_tags ?? [],

@@ -324,6 +324,16 @@ export class Channel {
   }
 
   /**
+   * Whether this forum imposes `defaultSort` on everyone (forums only).
+   * The server enforces it, so a `sort` passed to {@link fetchPosts} is
+   * ignored while this is set — clients should present the order as fixed
+   * rather than offer a control that appears to do nothing.
+   */
+  get forceSort(): boolean {
+    return this.#collection.getUnderlyingObject(this.id).forceSort || false;
+  }
+
+  /**
    * Default auto-archive duration in minutes applied to new posts
    * (forums only; 0 = never; undefined on older servers)
    */
@@ -394,8 +404,7 @@ export class Channel {
 
   /**
    * Minutes of inactivity after which this thread auto-archives
-   * (threads only; one of 0 / 60 / 1440 / 4320 / 10080 / 43200 / 129600;
-   * 0 = never)
+   * (threads only; 0 = never, otherwise 1 up to two years)
    */
   get autoArchiveMinutes(): number | undefined {
     return this.#collection.getUnderlyingObject(this.id).autoArchiveMinutes;
@@ -1251,7 +1260,8 @@ export class Channel {
    * @returns Posts, plus starter messages when requested
    */
   async fetchPosts(params?: {
-    sort?: "latest_activity" | "creation_date";
+    /** Ignored by forums with `forceSort` set; those answer in their own order. */
+    sort?: "latest_activity" | "creation_date" | "alphabetical";
     tag?: string;
     archived?: boolean;
     before?: string;

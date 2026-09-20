@@ -23,8 +23,8 @@ export interface ThreadChannelData {
   archived?: boolean;
   archived_timestamp?: string;
   /**
-   * Inactivity window before auto-archive, in minutes. One of
-   * 0 / 60 / 1440 / 4320 / 10080 / 43200 / 129600; 0 = never auto-archive.
+   * Inactivity window before auto-archive, in minutes.
+   * 0 = never auto-archive, otherwise 1 up to two years (1_051_200).
    */
   auto_archive_minutes?: number;
   locked?: boolean;
@@ -39,8 +39,8 @@ export interface ThreadChannelData {
 export interface DataCreateThread {
   name: string;
   /**
-   * Inactivity window before auto-archive, in minutes. One of
-   * 0 / 60 / 1440 / 4320 / 10080 / 43200 / 129600; 0 = never auto-archive.
+   * Inactivity window before auto-archive, in minutes.
+   * 0 = never auto-archive, otherwise 1 up to two years (1_051_200).
    * Server default is 1440 when omitted.
    */
   auto_archive_minutes?: number;
