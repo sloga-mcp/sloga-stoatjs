@@ -616,9 +616,13 @@ export class Client extends AsyncEventEmitter<Events> {
     );
 
     // A read made in the debounce window before a reload or a tab close
-    // would otherwise never reach the server.
+    // would otherwise never reach the server. The hook holds the client
+    // weakly: the app builds a fresh Client on every logout and account
+    // switch, and a strong reference here would keep each dead one, with
+    // its whole object graph, alive for the life of the page.
     if (typeof window !== "undefined") {
-      window.addEventListener("pagehide", () => this.flushAcks());
+      const ref = new WeakRef(this);
+      window.addEventListener("pagehide", () => ref.deref()?.flushAcks());
     }
   }
 
