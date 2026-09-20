@@ -1382,6 +1382,73 @@ export class Channel {
   #ackTimeout?: number;
   #ackLimit?: number;
   #manuallyMarked?: boolean;
+  /** Message id waiting on the debounce, until it is sent */
+  #ackPending?: string;
+  /** Newest message id the server has been asked to store */
+  #ackRequested?: string;
+
+  /**
+   * Send the acknowledgement request, retrying a failed attempt twice.
+   *
+   * Before this, a failed request was dropped on the floor: the local state
+   * said "read", the server was never told, and the next cold load showed
+   * the channel unread again. A retry is skipped once a newer ack has been
+   * requested for this channel, since replaying the older one would move
+   * the server's pointer backwards.
+   * @param messageId Message id to store as the read pointer
+   * @param attempt Zero-based attempt counter
+   * @param keepalive Send in a way that survives the page going away
+   */
+  #sendAck(messageId: string, attempt = 0, keepalive = false): void {
+    // A retry fires later, and by then a newer ack may have been requested.
+    if (attempt > 0 && this.#ackRequested !== messageId) return;
+
+    const client = this.#collection.client;
+    this.#ackRequested = messageId;
+
+    const request: Promise<unknown> = keepalive
+      ? fetch(
+          `${client.options.baseURL}/channels/${this.id}/ack/${messageId}`,
+          {
+            method: "PUT",
+            headers: client.api.auth,
+            keepalive: true,
+          },
+        ).then((response) => {
+          if (!response.ok) throw new Error(`ack failed: ${response.status}`);
+        })
+      : client.api.put(`/channels/${this.id}/ack/${messageId as ""}`);
+
+    request.catch(() => {
+      if (this.#ackRequested !== messageId) return;
+      if (attempt >= 2) {
+        console.warn(`[stoat.js] ack for ${this.id} failed after 3 attempts`);
+        return;
+      }
+
+      setTimeout(
+        () => this.#sendAck(messageId, attempt + 1),
+        2000 * (attempt + 1),
+      );
+    });
+  }
+
+  /**
+   * Send any acknowledgement still waiting on the debounce, right now and in
+   * a way that survives the page going away. Called for every channel from
+   * {@link Client.flushAcks} on `pagehide`, so a read made in the last
+   * second and a half before a reload is not lost.
+   */
+  flushAck(): void {
+    const messageId = this.#ackPending;
+    if (this.#ackTimeout === undefined || !messageId) return;
+
+    clearTimeout(this.#ackTimeout);
+    this.#ackTimeout = undefined;
+    this.#ackLimit = undefined;
+    this.#ackPending = undefined;
+    this.#sendAck(messageId, 0, true);
+  }
 
   /**
    * Mark a channel as read
@@ -1456,9 +1523,9 @@ export class Channel {
      */
     const performAck = (): void => {
       this.#ackLimit = undefined;
-      this.#collection.client.api.put(
-        `/channels/${this.id}/ack/${lastMessageId as ""}`,
-      );
+      this.#ackTimeout = undefined;
+      this.#ackPending = undefined;
+      this.#sendAck(lastMessageId);
     };
 
     if (skipRateLimiter) return performAck();
@@ -1468,6 +1535,7 @@ export class Channel {
       performAck();
     }
 
+    this.#ackPending = lastMessageId;
     this.#ackTimeout = setTimeout(performAck, 1500) as unknown as number;
 
     if (!this.#ackLimit) {

@@ -1020,6 +1020,14 @@ export async function handleEvent(
     case "ChannelAck": {
       const channel = client.channels.getOrPartial(event.id);
       if (channel) {
+        // The event reaches every session of the user who read the channel,
+        // so this is how a read made on another device clears the badge
+        // here. Until it was applied, the badge stayed lit until a reload
+        // pulled the server's pointer.
+        if (client.options.syncUnreads && event.user === client.user?.id) {
+          client.channelUnreads.acknowledge(event.id, event.message_id);
+        }
+
         client.emit("channelAcknowledged", channel, event.message_id);
       }
       break;

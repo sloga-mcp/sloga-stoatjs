@@ -614,6 +614,22 @@ export class Client extends AsyncEventEmitter<Events> {
     this.events.on("event", (event) =>
       handleEvent(this, event, this.#setReady),
     );
+
+    // A read made in the debounce window before a reload or a tab close
+    // would otherwise never reach the server.
+    if (typeof window !== "undefined") {
+      window.addEventListener("pagehide", () => this.flushAcks());
+    }
+  }
+
+  /**
+   * Send every acknowledgement still waiting on its debounce, in a way that
+   * survives the page going away. See {@link Channel.flushAck}.
+   */
+  flushAcks(): void {
+    for (const channel of this.channels.values()) {
+      channel.flushAck();
+    }
   }
 
   /**
