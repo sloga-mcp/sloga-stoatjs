@@ -24,6 +24,13 @@ export class ChannelUnreadCollection extends ClassCollection<
     batch(() => {
       this.reset();
       for (const unread of unreads) {
+        // delete-then-create, never getOrCreate: reading `Channel.unread` for
+        // an unknown channel creates a placeholder row via `for()`, and the
+        // badge effect does exactly that between the Ready batch and this
+        // request resolving. getOrCreate would hand back that placeholder and
+        // silently discard the server's read pointer, leaving every channel
+        // the UI touched marked fully unread for the whole session.
+        this.delete(unread._id.channel);
         this.getOrCreate(unread._id.channel, unread);
       }
     });
@@ -33,7 +40,11 @@ export class ChannelUnreadCollection extends ClassCollection<
    * Clear all unread data
    */
   reset(): void {
-    this.updateUnderlyingObject({});
+    // `updateUnderlyingObject({})` is a Solid store set with an empty patch,
+    // which MERGES: it cleared nothing and left every instance in place.
+    batch(() => {
+      for (const id of [...this.keys()]) this.delete(id);
+    });
   }
 
   /**
