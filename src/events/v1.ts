@@ -219,8 +219,35 @@ type ServerMessage =
       data: Partial<UserVoiceState>;
     }
   | {
+      /**
+       * A moderator moved this user to another voice channel. PRIVATE topic
+       * — the moved user only. The server has already removed them from the
+       * old room by the time this lands, so a client that ignores it is left
+       * in no call at all.
+       *
+       * `node` is the node NAME (a key into the server's livekit config) and
+       * is not connectable; it is kept for parity with the wire event. `url`
+       * is the one to dial.
+       */
       type: "UserMoveVoiceChannel";
       node: string;
+      url: string;
+      /**
+       * The session the `token` below was minted for — the server knows
+       * exactly which participant identity it issued, and this says so.
+       * Additive; absent means the server could not identify the device.
+       *
+       * This is the addressing the private topic itself cannot give: the
+       * event reaches every session of the moved user (see above), and the
+       * token is minted ONCE, for one identity, so two sessions acting on it
+       * race and the SFU evicts one of them on duplicate identity. The
+       * consumer must compare this against its OWN device id and act only on
+       * a match. This library deliberately does not gate on it — it does not
+       * know which device it is running as.
+       */
+      device_id?: string;
+      from: string;
+      to: string;
       token: string;
     }
   | {
@@ -1432,7 +1459,34 @@ export async function handleEvent(
       break;
     }
     case "VoiceChannelMove": {
-      // todo
+      // voice-ingress deliberately suppresses `VoiceChannelLeave` when a user
+      // is moved, so this event is the ONLY thing that clears the stale roster
+      // entry in the old channel — nothing else will.
+      //
+      // Each half is applied on its own: `getOrPartial` returns undefined when
+      // the channel is unknown and partials are off, and leaving the user
+      // rendered in a channel they are no longer in is the visible bug, so the
+      // half we can resolve is still worth doing. The emit needs both channels
+      // to be meaningful, so it only fires when both resolved.
+      const fromChannel = client.channels.getOrPartial(event.from);
+      if (fromChannel) {
+        fromChannel.voiceParticipants.delete(event.user);
+      }
+
+      const toChannel = client.channels.getOrPartial(event.to);
+      if (toChannel) {
+        toChannel.voiceParticipants.set(
+          event.user,
+          new VoiceParticipant(client, event.state),
+        );
+      }
+
+      // Caches first, emit after: consumers read the channel state as it is
+      // AFTER the event (see the outgoing ring policy, which counts
+      // participants straight off the channel inside its handler).
+      if (fromChannel && toChannel) {
+        client.emit("voiceChannelMove", fromChannel, toChannel, event.user);
+      }
       break;
     }
     case "UserVoiceStateUpdate": {
@@ -1444,7 +1498,29 @@ export async function handleEvent(
       break;
     }
     case "UserMoveVoiceChannel": {
-      // todo
+      // A pure re-emit — no cache mutation. The roster belongs to the
+      // channel-topic `VoiceChannelMove` above, which every client receives;
+      // touching `voiceParticipants` here would double-apply it for the moved
+      // user.
+      //
+      // Like every private topic this reaches EVERY session of the target,
+      // including devices that are not in the call at all. This library has no
+      // idea which session (if any) holds the live connection, so it does not
+      // gate — the consumer must check that it is actually in the call before
+      // acting on the token, or an idle second device will dial into the new
+      // room on its own. `deviceId` is what makes that check exact rather than
+      // a guess: it names the session the token was minted for.
+      //
+      // `?? undefined` so consumers have ONE absent value to test — an absent
+      // key and an explicit null both arrive here as undefined.
+      client.emit("userMoveVoiceChannel", {
+        node: event.node,
+        url: event.url,
+        deviceId: event.device_id ?? undefined,
+        from: event.from,
+        to: event.to,
+        token: event.token,
+      });
       break;
     }
     case "RemoteControlOffered": {

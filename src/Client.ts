@@ -192,6 +192,42 @@ export type Events = {
   voiceChannelLeave: [channel: Channel, userId: string];
 
   /**
+   * A participant was moved between two voice channels (channel topic). No
+   * `voiceChannelLeave` accompanies a move — the server suppresses it — so
+   * this is the only signal that clears the old channel's roster entry.
+   */
+  voiceChannelMove: [from: Channel, to: Channel, userId: string];
+
+  /**
+   * A moderator moved THIS user to another voice channel; carries the token
+   * for the new room (private topic).
+   *
+   * `node` is the node name and is not connectable — dial `url`.
+   *
+   * Like every private topic this reaches EVERY session of this user,
+   * including ones not in the call, and the old room connection is already
+   * gone server-side. The consumer must confirm it holds the live call before
+   * acting on the token.
+   *
+   * `deviceId` names the session the token was minted for, and is how that
+   * confirmation is made exact: compare it against this session's own device
+   * id and act only on a match. `undefined` means the server could not
+   * identify the device (or predates the field), so there is nothing to match
+   * against. Camel-cased here like the rest of this library's public surface;
+   * the wire field is `device_id`.
+   */
+  userMoveVoiceChannel: [
+    move: {
+      node: string;
+      url: string;
+      deviceId: string | undefined;
+      from: string;
+      to: string;
+      token: string;
+    },
+  ];
+
+  /**
    * A soundboard sound was triggered in a voice call (channel topic).
    * Carries only the public sound id — the voice store plays the clip
    * locally if this client is currently in that call.
