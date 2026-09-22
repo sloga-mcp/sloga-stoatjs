@@ -211,6 +211,22 @@ export class Server {
   }
 
   /**
+   * Id of this server's AFK voice channel, if one is designated.
+   * Members moved here are muted at the SFU; `undefined` = no AFK channel.
+   */
+  get afkChannelId(): string | undefined {
+    return this.#collection.getUnderlyingObject(this.id).afkChannelId;
+  }
+
+  /**
+   * Idle timeout in SECONDS before an idle member is moved to the AFK
+   * channel; `undefined` = no timeout configured.
+   */
+  get afkTimeout(): number | undefined {
+    return this.#collection.getUnderlyingObject(this.id).afkTimeout;
+  }
+
+  /**
    * Whether this server is marked as mature
    */
   get mature(): boolean {

@@ -36,11 +36,21 @@ export type HydratedServer = {
   nsfw: boolean;
   /** Preferred voice node name; `undefined` = automatic (lowest latency) */
   voiceRegion?: string;
+  /** Id of this server's AFK voice channel; `undefined` = none designated */
+  afkChannelId?: string;
+  /** Idle timeout in SECONDS before a member is moved to the AFK channel */
+  afkTimeout?: number;
 };
 
 export const serverHydration: Hydrate<
-  // `discovery_requested` / `voice_region` are additive; stoat-api predates them.
-  APIServer & { discovery_requested?: boolean; voice_region?: string },
+  // `discovery_requested` / `voice_region` / `afk_channel_id` / `afk_timeout`
+  // are additive; stoat-api predates them.
+  APIServer & {
+    discovery_requested?: boolean;
+    voice_region?: string;
+    afk_channel_id?: string | null;
+    afk_timeout?: number | null;
+  },
   HydratedServer
 > = {
   keyMapping: {
@@ -51,6 +61,8 @@ export const serverHydration: Hydrate<
     default_permissions: "defaultPermissions",
     discovery_requested: "discoveryRequested",
     voice_region: "voiceRegion",
+    afk_channel_id: "afkChannelId",
+    afk_timeout: "afkTimeout",
   },
   functions: {
     id: (server) => server._id,
@@ -76,11 +88,15 @@ export const serverHydration: Hydrate<
     discoveryRequested: (server) => server.discovery_requested || false,
     nsfw: (server) => server.nsfw || false,
     voiceRegion: (server) => server.voice_region ?? undefined,
+    afkChannelId: (server) => server.afk_channel_id ?? undefined,
+    afkTimeout: (server) => server.afk_timeout ?? undefined,
   },
   initialHydration: () => ({
     channelIds: new ReactiveSet(),
     roles: new ReactiveMap(),
     voiceRegion: undefined,
+    afkChannelId: undefined,
+    afkTimeout: undefined,
   }),
 };
 

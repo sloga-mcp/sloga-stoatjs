@@ -1100,6 +1100,16 @@ export async function handleEvent(
               case "VoiceRegion" as string:
                 changes["voiceRegion"] = undefined;
                 break;
+              // NOTE: the remove-enum variant is `AfkChannel`, the field is
+              // `afk_channel_id`. The backend only ever clears these through
+              // `clear`, never through the partial, so this switch is the
+              // sole path by which a cleared AFK designation reaches a client.
+              case "AfkChannel" as string:
+                changes["afkChannelId"] = undefined;
+                break;
+              case "AfkTimeout" as string:
+                changes["afkTimeout"] = undefined;
+                break;
             }
           }
         }
