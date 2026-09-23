@@ -210,12 +210,13 @@ export type Events = {
    * consumer must confirm it holds the addressed connection before acting on
    * the token: identified by `connNonce` when present, else by `deviceId`.
    *
-   * `deviceId` names the session the token was minted for, and is how that
-   * confirmation is made exact: compare it against this session's own device
-   * id and act only on a match. `undefined` means the server could not
-   * identify the device (or predates the field), so there is nothing to match
-   * against. Camel-cased here like the rest of this library's public surface;
-   * the wire field is `device_id`.
+   * `deviceId` is the device suffix of the identity the token was minted for
+   * (`undefined` for a bare identity, or a server that predates the field).
+   * It is the fallback test when either side lacks a `connNonce`. It names a
+   * DEVICE, not a connection, since tabs of one browser share it, so only
+   * `connNonce` can tell sibling connections on one device apart.
+   * Camel-cased here like the rest of this library's public surface; the wire
+   * field is `device_id`.
    */
   userMoveVoiceChannel: [
     move: {
