@@ -192,15 +192,19 @@ export type Events = {
   voiceChannelLeave: [channel: Channel, userId: string];
 
   /**
-   * A participant was moved between two voice channels (channel topic). No
-   * `voiceChannelLeave` accompanies a move — the server suppresses it — so
-   * this is the only signal that clears the old channel's roster entry.
+   * A participant was moved between two voice channels (channel topic). The
+   * server also publishes a `voiceChannelLeave` for `from` when the moved
+   * seat leaves it, so that Leave may arrive before or after this event. Both
+   * orders converge on the same rosters: the Leave touches only `from`, both
+   * delete the user there, and deleting an absent entry is a no-op. This
+   * event still clears `from` itself, because the Leave can be late or lost.
    */
   voiceChannelMove: [from: Channel, to: Channel, userId: string];
 
   /**
-   * A moderator moved THIS user to another voice channel; carries the token
-   * for the new room (private topic).
+   * THIS user was moved to another voice channel; carries the token for the
+   * new room (private topic). The move may come from a moderator or from the
+   * server's idle sweep, and nothing on the wire says which.
    *
    * `node` is the node name and is not connectable — dial `url`.
    *

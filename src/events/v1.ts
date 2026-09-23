@@ -1468,9 +1468,12 @@ export async function handleEvent(
       break;
     }
     case "VoiceChannelMove": {
-      // voice-ingress deliberately suppresses `VoiceChannelLeave` when a user
-      // is moved, so this event is the ONLY thing that clears the stale roster
-      // entry in the old channel — nothing else will.
+      // voice-ingress also publishes a `VoiceChannelLeave` for `from` when the
+      // moved seat leaves it, so that Leave may arrive before or after this
+      // event. Both orders converge on the same rosters: the Leave touches only
+      // `from`, both delete the user there, and deleting an absent entry is a
+      // no-op. This event still clears `from` itself, because the Leave can be
+      // late or lost.
       //
       // Each half is applied on its own: `getOrPartial` returns undefined when
       // the channel is unknown and partials are off, and leaving the user

@@ -1646,6 +1646,11 @@ export class Channel {
    *   device-qualified LiveKit identity `{user_id}:{device_id}` so per-device
    *   MLS frame keys map injectively (media E2EE, slice 6.1/6.4). Omit for
    *   web / non-E2EE calls (identity stays the bare user id).
+   * @param rejoin True only for an automatic rejoin after an involuntary drop
+   *   (never for a user-initiated join). The server then refuses with
+   *   `AlreadyConnected` instead of force-disconnecting a live seat in another
+   *   channel, so a stale sibling's rejoin cannot kick a seat that was moved
+   *   meanwhile. Omitted or false sends no `rejoin` key (today's behavior).
    * @returns LiveKit URL and Token
    */
   async joinCall(
@@ -1653,6 +1658,7 @@ export class Channel {
     forceDisconnect = true,
     recipients?: (User | string)[],
     deviceId?: string,
+    rejoin?: boolean,
   ) {
     const body = {
       node,
@@ -1663,10 +1669,14 @@ export class Channel {
     };
     return await this.#collection.client.api.post(
       `/channels/${this.id as ""}/join_call`,
-      // `device_id` is carried at runtime by the generic body mapper for this
-      // known route; stoat-api 0.13.5's `DataJoinCall` type predates the field,
-      // so cast back to the pre-field body type to satisfy the compiler.
-      (deviceId ? { ...body, device_id: deviceId } : body) as typeof body,
+      // `device_id` and `rejoin` are carried at runtime by the generic body
+      // mapper for this known route; stoat-api 0.13.5's `DataJoinCall` type
+      // predates both fields, so cast back to the pre-field body type to
+      // satisfy the compiler.
+      {
+        ...(deviceId ? { ...body, device_id: deviceId } : body),
+        ...(rejoin ? { rejoin: true } : {}),
+      } as typeof body,
     );
   }
 
