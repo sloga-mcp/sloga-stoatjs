@@ -205,9 +205,10 @@ export type Events = {
    * `node` is the node name and is not connectable — dial `url`.
    *
    * Like every private topic this reaches EVERY session of this user,
-   * including ones not in the call, and the old room connection is already
-   * gone server-side. The consumer must confirm it holds the live call before
-   * acting on the token.
+   * including ones not in the call. The server sends it BEFORE evicting the
+   * source connection(s) from the old room, and evicts them right after. The
+   * consumer must confirm it holds the addressed connection before acting on
+   * the token: identified by `connNonce` when present, else by `deviceId`.
    *
    * `deviceId` names the session the token was minted for, and is how that
    * confirmation is made exact: compare it against this session's own device
@@ -221,6 +222,13 @@ export type Events = {
       node: string;
       url: string;
       deviceId: string | undefined;
+      /**
+       * The SOURCE connection's per-connection nonce (LiveKit token attribute
+       * `"conn"`), which addresses exactly one connection of this user.
+       * `undefined` when the server predates the field or the SFU does not
+       * propagate token attributes. The wire field is `conn_nonce`.
+       */
+      connNonce: string | undefined;
       from: string;
       to: string;
       token: string;

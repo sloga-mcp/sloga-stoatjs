@@ -221,9 +221,9 @@ type ServerMessage =
   | {
       /**
        * A moderator moved this user to another voice channel. PRIVATE topic
-       * — the moved user only. The server has already removed them from the
-       * old room by the time this lands, so a client that ignores it is left
-       * in no call at all.
+       * — the moved user only. The server sends this BEFORE it evicts the
+       * source connection(s) from the old room, and evicts them right after,
+       * so a client that ignores it is left in no call at all.
        *
        * `node` is the node NAME (a key into the server's livekit config) and
        * is not connectable; it is kept for parity with the wire event. `url`
@@ -246,6 +246,15 @@ type ServerMessage =
        * know which device it is running as.
        */
       device_id?: string;
+      /**
+       * The SOURCE connection's per-connection nonce — the LiveKit token
+       * attribute `"conn"` of the connection being moved, never the new
+       * token's. It addresses exactly one connection of the user, which
+       * `device_id` cannot do for sessions that join without a device id.
+       * Absent from older servers, or when the SFU does not propagate token
+       * attributes.
+       */
+      conn_nonce?: string;
       from: string;
       to: string;
       token: string;
@@ -1509,14 +1518,18 @@ export async function handleEvent(
       // gate — the consumer must check that it is actually in the call before
       // acting on the token, or an idle second device will dial into the new
       // room on its own. `deviceId` is what makes that check exact rather than
-      // a guess: it names the session the token was minted for.
+      // a guess: it names the session the token was minted for. `connNonce`,
+      // when present, is sharper still: it names the one source connection.
       //
       // `?? undefined` so consumers have ONE absent value to test — an absent
-      // key and an explicit null both arrive here as undefined.
+      // key and an explicit null both arrive here as undefined. `connNonce`
+      // uses `||` so an empty string also normalises to undefined: an empty
+      // nonce addresses nothing.
       client.emit("userMoveVoiceChannel", {
         node: event.node,
         url: event.url,
         deviceId: event.device_id ?? undefined,
+        connNonce: event.conn_nonce || undefined,
         from: event.from,
         to: event.to,
         token: event.token,
