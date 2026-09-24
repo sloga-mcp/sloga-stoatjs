@@ -220,10 +220,17 @@ type ServerMessage =
     }
   | {
       /**
-       * A moderator moved this user to another voice channel. PRIVATE topic
-       * — the moved user only. The server sends this BEFORE it evicts the
-       * source connection(s) from the old room, and evicts them right after,
-       * so a client that ignores it is left in no call at all.
+       * The server moved this user to another voice channel. Every sender
+       * goes through the backend's one emitter,
+       * `move_user_to_voice_channel_expecting` (core database
+       * `voice/mod.rs`), which is reached from two places: a moderator's
+       * move (the member edit route, `member_edit.rs`) and the AFK idle
+       * sweep in crond (`afk_sweep.rs`), which has no acting user. Nothing on
+       * the wire says which one it was.
+       *
+       * PRIVATE topic — the moved user only. The server sends this BEFORE it
+       * evicts the source connection(s) from the old room, and evicts them
+       * right after, so a client that ignores it is left in no call at all.
        *
        * `node` is the node NAME (a key into the server's livekit config) and
        * is not connectable; it is kept for parity with the wire event. `url`
@@ -1526,7 +1533,7 @@ export async function handleEvent(
       //
       // `?? undefined` so consumers have ONE absent value to test — an absent
       // key and an explicit null both arrive here as undefined. `connNonce`
-      // uses `||` so an empty string also normalises to undefined: an empty
+      // uses `||` so an empty string also normalizes to undefined: an empty
       // nonce addresses nothing.
       client.emit("userMoveVoiceChannel", {
         node: event.node,
