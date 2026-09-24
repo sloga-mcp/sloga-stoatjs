@@ -802,11 +802,15 @@ export class Channel {
       },
     );
 
-    return this.#collection.client.messages.getOrCreate(
+    const sent = this.#collection.client.messages.getOrCreate(
       message._id,
       message,
       true,
     );
+
+    // The server has already acked the channel for us; mirror it locally.
+    this.noteOwnMessage(message._id);
+    return sent;
   }
 
   /**
@@ -827,11 +831,14 @@ export class Channel {
       { body: { ...data, nonce: data.nonce ?? idempotencyKey } },
     )) as { _id: string };
 
-    return this.#collection.client.messages.getOrCreate(
+    const sent = this.#collection.client.messages.getOrCreate(
       message._id,
       message as never,
       true,
     );
+
+    this.noteOwnMessage(message._id);
+    return sent;
   }
 
   /**
@@ -854,11 +861,14 @@ export class Channel {
       { body: { ...data, nonce: data.nonce ?? idempotencyKey } },
     )) as { _id: string };
 
-    return this.#collection.client.messages.getOrCreate(
+    const sent = this.#collection.client.messages.getOrCreate(
       message._id,
       message as never,
       true,
     );
+
+    this.noteOwnMessage(message._id);
+    return sent;
   }
 
   /**
@@ -1247,6 +1257,11 @@ export class Channel {
       response.message._id,
       response.message,
     );
+
+    // The forum's last message becomes the post id and the starter shares
+    // it; the server acks both for us.
+    this.noteOwnMessage(response.post._id);
+    post.noteOwnMessage(response.message._id);
     return { post, message };
   }
 
@@ -1541,6 +1556,51 @@ export class Channel {
     if (!this.#ackLimit) {
       this.#ackLimit = +new Date() + 4e3;
     }
+  }
+
+  /**
+   * For internal use only: records a message this client just authored. The
+   * server acks the channel for its author at send, so this mirrors that
+   * locally without a request.
+   *
+   * Everything here only moves forward, so a late or repeated call is a
+   * no-op. Unlike {@link ack} it never sends a request and never touches the
+   * debounce beyond dropping what the server's self-ack already covers.
+   * @param messageId Id of the message this client just sent
+   */
+  noteOwnMessage(messageId: string): void {
+    const client = this.#collection.client;
+
+    batch(() => {
+      if ((this.lastMessageId ?? "0").localeCompare(messageId) === -1) {
+        this.#collection.updateUnderlyingObject(
+          this.id,
+          "lastMessageId",
+          messageId,
+        );
+      }
+
+      if (client.options.syncUnreads) {
+        client.channelUnreads.acknowledge(this.id, messageId);
+      }
+    });
+
+    // A debounced ack at or before this message is covered by the server's
+    // self-ack; sending it now would be a wasted request.
+    if (this.#ackPending && this.#ackPending.localeCompare(messageId) !== 1) {
+      clearTimeout(this.#ackTimeout);
+      this.#ackTimeout = undefined;
+      this.#ackLimit = undefined;
+      this.#ackPending = undefined;
+    }
+
+    // Retries of an older failed ack must not move the server's pointer back
+    // past the self-ack; a newer ack's retry is left alone.
+    if ((this.#ackRequested ?? "0").localeCompare(messageId) === -1) {
+      this.#ackRequested = messageId;
+    }
+
+    this.#manuallyMarked = false;
   }
 
   /**

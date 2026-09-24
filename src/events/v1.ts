@@ -673,8 +673,10 @@ export async function handleEvent(
       break;
     }
     case "Message": {
-      if (!client.messages.has(event._id)) {
-        batch(() => {
+      batch(() => {
+        const channel = client.channels.get(event.channel);
+
+        if (!client.messages.has(event._id)) {
           if (event.member) {
             client.serverMembers.getOrCreate(event.member._id, event.member);
           }
@@ -696,45 +698,56 @@ export async function handleEvent(
             client.scheduledMessages.delete(event.nonce);
           }
 
-          const channel = client.channels.get(event.channel);
-          if (!channel) return;
+          // Own messages never count: the server acks the channel for the
+          // author at send time, and the server's ChannelAck that follows a
+          // live send clears it on every session. No local ack here.
+          if (
+            channel &&
+            client.options.syncUnreads &&
+            event.author !== client.user?.id
+          ) {
+            const unread = client.channelUnreads.for(channel);
 
+            // Only a message past the read pointer counts, so a ChannelAck
+            // that raced ahead of its Message leaves nothing to count.
+            if ((unread.lastMessageId ?? "0").localeCompare(event._id) === -1) {
+              // Keep the badge count live between connects. It saturates at
+              // the same cap the server uses, so the two agree on "99+".
+              client.channelUnreads.updateUnderlyingObject(
+                channel.id,
+                "unreadCount",
+                Math.min(unread.unreadCount + 1, UNREAD_COUNT_CAP),
+              );
+
+              if (event.attachments?.length && !unread.unreadHasAttachments) {
+                client.channelUnreads.updateUnderlyingObject(
+                  channel.id,
+                  "unreadHasAttachments",
+                  true,
+                );
+              }
+
+              if (event.mentions?.includes(client.user!.id)) {
+                unread.messageMentionIds.add(event._id);
+              }
+            }
+          }
+        }
+
+        // Outside the dedupe: the sender's HTTP response may have cached the
+        // message first. Forward-only, so a late or replayed event never
+        // moves the channel's last message back.
+        if (
+          channel &&
+          (channel.lastMessageId ?? "0").localeCompare(event._id) === -1
+        ) {
           client.channels.updateUnderlyingObject(
             channel.id,
             "lastMessageId",
             event._id,
           );
-
-          if (client.options.syncUnreads) {
-            const unread = client.channelUnreads.for(channel);
-
-            // Keep the badge count live between connects. It saturates at the
-            // same cap the server uses, so the two agree on "99+".
-            client.channelUnreads.updateUnderlyingObject(
-              channel.id,
-              "unreadCount",
-              Math.min(unread.unreadCount + 1, UNREAD_COUNT_CAP),
-            );
-
-            if (event.attachments?.length && !unread.unreadHasAttachments) {
-              client.channelUnreads.updateUnderlyingObject(
-                channel.id,
-                "unreadHasAttachments",
-                true,
-              );
-            }
-
-            if (event.mentions?.includes(client.user!.id)) {
-              unread.messageMentionIds.add(event._id);
-              client.channels.updateUnderlyingObject(
-                event.channel,
-                "lastMessageId",
-                event._id,
-              );
-            }
-          }
-        });
-      }
+        }
+      });
       break;
     }
     case "MessageUpdate": {
