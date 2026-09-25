@@ -1310,6 +1310,12 @@ export async function handleEvent(
               case "Pronouns":
                 changes["pronouns"] = undefined;
                 break;
+              case "NameStyle":
+                changes["nameStyle"] = undefined;
+                break;
+              case "CustomBadge":
+                changes["customBadge"] = undefined;
+                break;
             }
           }
         }

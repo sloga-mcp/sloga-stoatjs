@@ -7,6 +7,7 @@ import type { UserCollection } from "../collections/UserCollection.js";
 import { hydrate } from "../hydration/index.js";
 import type { UserConnection } from "../hydration/user.js";
 import { U32_MAX, UserPermission } from "../permissions/definitions.js";
+import type { DataEditUserExt, NameStyle, UserPerks } from "../types/perks.js";
 
 import type { Channel } from "./Channel.js";
 import type { File } from "./File.js";
@@ -87,6 +88,39 @@ export class User {
    */
   get badges(): number {
     return this.#collection.getUnderlyingObject(this.id).badges;
+  }
+
+  /**
+   * Custom badge, if the user has one
+   */
+  get customBadge(): { image: File; label: string } | undefined {
+    return this.#collection.getUnderlyingObject(this.id).customBadge;
+  }
+
+  /**
+   * Name style, limited to the parts the user's perks allow
+   */
+  get nameStyle(): NameStyle | undefined {
+    return this.#collection.getUnderlyingObject(this.id).nameStyle;
+  }
+
+  /**
+   * Perk bitfield
+   * (normally only known for the session user, 0 for everyone else; editing
+   * another account caches its perks from the response, which then go stale)
+   */
+  get perks(): number {
+    return this.#collection.getUnderlyingObject(this.id).perks ?? 0;
+  }
+
+  /**
+   * Check whether the user has a perk
+   * (only meaningful for the session user)
+   * @param perk Perk
+   * @returns Whether the perk is set
+   */
+  hasPerk(perk: UserPerks): boolean {
+    return (this.perks & perk) === perk;
   }
 
   /**
@@ -292,7 +326,7 @@ export class User {
    * Edit the user
    * @param data Changes
    */
-  async edit(data: DataEditUser): Promise<void> {
+  async edit(data: DataEditUserExt): Promise<void> {
     this.#collection.updateUnderlyingObject(
       this.id,
       hydrate(
@@ -301,7 +335,8 @@ export class User {
           `/users/${
             this.id === this.#collection.client.user?.id ? "@me" : this.id
           }`,
-          data,
+          // The server accepts fields newer than the published route type
+          data as DataEditUser,
         ),
         this.#collection.client,
         false,

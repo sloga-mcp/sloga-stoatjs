@@ -4,7 +4,13 @@ import { batch, createSignal } from "solid-js";
 import { ReactiveMap } from "@solid-primitives/map";
 import { AsyncEventEmitter } from "@vladfrangu/async_event_emitter";
 import { API } from "stoat-api";
-import type { DataLogin, RevoltConfig, Role } from "stoat-api";
+import type {
+  DataLogin,
+  LimitsConfig,
+  RevoltConfig,
+  Role,
+  UserLimits,
+} from "stoat-api";
 
 import type { CalendarEvent, EventRsvpData } from "./classes/CalendarEvent.js";
 import type { Channel } from "./classes/Channel.js";
@@ -15,13 +21,13 @@ import type { Emoji } from "./classes/Emoji.js";
 import type { InteractionCreateEvent } from "./classes/Interaction.js";
 import type { Message } from "./classes/Message.js";
 import type { ScheduledMessageData } from "./classes/ScheduledMessage.js";
+import type { Server } from "./classes/Server.js";
+import type { ServerMember } from "./classes/ServerMember.js";
 import type {
   SoftResCatalogResponse,
   SoftResData,
   SoftResRaidItemsResponse,
 } from "./classes/SoftRes.js";
-import type { Server } from "./classes/Server.js";
-import type { ServerMember } from "./classes/ServerMember.js";
 import type { User } from "./classes/User.js";
 import { AccountCollection } from "./collections/AccountCollection.js";
 import { BotCollection } from "./collections/BotCollection.js";
@@ -55,6 +61,29 @@ import {
 } from "./lib/regex.js";
 
 export type Session = { _id: string; token: string; user_id: string } | string;
+
+/**
+ * Per-account limits from the server configuration
+ */
+export type ConfigUserLimits = UserLimits;
+
+/**
+ * Limits from the server configuration
+ */
+export type ConfigLimits = LimitsConfig & {
+  /**
+   * Limits for accounts with the upload perk, same shape as `default`;
+   * absent when the server has no perk limits configured
+   */
+  perk?: ConfigUserLimits;
+};
+
+/**
+ * Server configuration, including fields newer than the published API types
+ */
+export type ClientConfiguration = RevoltConfig & {
+  features: RevoltConfig["features"] & { limits: ConfigLimits };
+};
 
 /**
  * Events provided by the client
@@ -483,7 +512,7 @@ export class Client extends AsyncEventEmitter<Events> {
   readonly options: ClientOptions;
   readonly events: EventClient<1>;
 
-  configuration: RevoltConfig | undefined;
+  configuration: ClientConfiguration | undefined;
   #session: Session | undefined;
   user: User | undefined;
 
@@ -507,7 +536,10 @@ export class Client extends AsyncEventEmitter<Events> {
   /**
    * Create Stoat.js Client
    */
-  constructor(options?: Partial<ClientOptions>, configuration?: RevoltConfig) {
+  constructor(
+    options?: Partial<ClientOptions>,
+    configuration?: ClientConfiguration,
+  ) {
     super();
 
     this.options = {
@@ -960,7 +992,10 @@ export class Client extends AsyncEventEmitter<Events> {
   fetchSoftResCatalog(): Promise<SoftResCatalogResponse> {
     if (!this.#softresCatalog) {
       this.#softresCatalog = (
-        this.#apiReq("GET", "/softres/catalog") as Promise<SoftResCatalogResponse>
+        this.#apiReq(
+          "GET",
+          "/softres/catalog",
+        ) as Promise<SoftResCatalogResponse>
       ).catch((error) => {
         this.#softresCatalog = undefined;
         throw error;
