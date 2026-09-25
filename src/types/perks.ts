@@ -26,7 +26,17 @@ export type NameStyle = {
  * Body of PATCH /users/:id, including fields newer than the published API types
  */
 export type DataEditUserExt = Omit<DataEditUser, "remove"> & {
-  /** Personal name style; parts the user lacks the perk for are rejected (PerkRequired) */
+  /**
+   * Personal name style, merged with the stored style one part at a time.
+   * A part the user holds the perk for is set from the request, or cleared if
+   * absent. A part the user lacks the perk for (e.g. a lapsed perk) keeps its
+   * stored value; omitting it or resending that value is fine, but any other
+   * value fails with PerkRequired. So `{}` clears only the parts the user holds
+   * the perk for, and a style left with no parts is cleared entirely.
+   * `remove: ["NameStyle"]` clears every part, locked or not; sent together with
+   * `name_style`, the stored style is dropped first, so only parts the user
+   * holds the perk for can be set.
+   */
   name_style?: NameStyle;
   /** Fields to remove; Connections (unlink instead) and CustomBadge are not removable here */
   remove?: (
