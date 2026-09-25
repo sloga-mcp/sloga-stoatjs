@@ -82,6 +82,11 @@ type ServerMessage =
   | { type: "Error"; data: Error }
   | { type: "Bulk"; v: ServerMessage[] }
   | { type: "Authenticated" }
+  /**
+   * This connection's session was deleted (revoked from another device,
+   * "log out everywhere", or a bot token reset). Nothing more follows on it.
+   */
+  | { type: "Logout" }
   | ({ type: "Ready" } & Partial<ReadyData>)
   | { type: "Ping"; data: number }
   | { type: "Pong"; data: number }
