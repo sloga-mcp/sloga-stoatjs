@@ -1283,6 +1283,9 @@ export async function handleEvent(
               case "Avatar":
                 changes["avatar"] = undefined;
                 break;
+              case "DisplayName":
+                changes["displayName"] = undefined;
+                break;
               case "StatusPresence":
                 changes["status"] = {
                   ...(previousUser.status ?? {}),
