@@ -40,6 +40,8 @@ import { UNREAD_COUNT_CAP } from "../hydration/channelUnread.js";
 import type { WatchSessionData } from "../lib/watch.js";
 import { hydrate } from "../hydration/index.js";
 
+import { redactEventForLog } from "./EventClient.js";
+
 /**
  * Version 1 of the events protocol
  */
@@ -224,9 +226,22 @@ type ServerMessage =
       data: Partial<UserVoiceState>;
     }
   | {
+      /**
+       * PRIVATE (this user's topic only): this user is being moved from
+       * voice channel `from` to `to` on SFU `node`. `url` is present
+       * whenever the node has a public URL. `token` is present for the
+       * session bound to a device-qualified identity, or for every session
+       * when the identity is bare (media E2EE off); it is absent when a
+       * qualified identity has no bound session. Its presence never means
+       * this connection is in the call. `token` is a live SFU credential
+       * and must never be logged.
+       */
       type: "UserMoveVoiceChannel";
       node: string;
-      token: string;
+      from: string;
+      to: string;
+      token?: string;
+      url?: string;
     }
   | {
       /**
@@ -595,7 +610,7 @@ export async function handleEvent(
   setReady: Setter<boolean>,
 ): Promise<void> {
   if (client.options.debug) {
-    console.debug("[S->C]", event);
+    console.debug("[S->C]", redactEventForLog(event));
   }
 
   switch (event.type) {
@@ -1449,7 +1464,22 @@ export async function handleEvent(
       break;
     }
     case "VoiceChannelMove": {
-      // todo
+      // Published on the destination channel's topic only. Observers of the
+      // source get the server's own VoiceChannelLeave, so none is
+      // synthesized here, and no voiceChannelJoin is emitted for the move.
+      const channel = client.channels.getOrPartial(event.to);
+      batch(() => {
+        client.channels
+          .getOrPartial(event.from)
+          ?.voiceParticipants.delete(event.user);
+        channel?.voiceParticipants.set(
+          event.state.id,
+          new VoiceParticipant(client, event.state),
+        );
+      });
+      if (channel) {
+        client.emit("voiceChannelMove", channel, event.user, event.from);
+      }
       break;
     }
     case "UserVoiceStateUpdate": {
@@ -1461,7 +1491,17 @@ export async function handleEvent(
       break;
     }
     case "UserMoveVoiceChannel": {
-      // todo
+      // Private to this user and transient, so nothing is cached. `token`
+      // reaches every session when the identity is bare, so its presence
+      // is not an in-call signal. It is a live SFU credential: pass it
+      // through, never log it.
+      client.emit("voiceMoveRequested", {
+        from: event.from,
+        to: event.to,
+        node: event.node,
+        url: event.url,
+        token: event.token,
+      });
       break;
     }
     case "RemoteControlOffered": {

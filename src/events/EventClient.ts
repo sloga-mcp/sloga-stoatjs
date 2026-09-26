@@ -5,7 +5,10 @@ import { AsyncEventEmitter } from "@vladfrangu/async_event_emitter";
 import { JSONParse, JSONStringify } from "json-with-bigint";
 import type { Error } from "stoat-api";
 
+import { redactEventForLog } from "./redactEvent.js";
 import type { ProtocolV1 } from "./v1.js";
+
+export { redactEventForLog } from "./redactEvent.js";
 
 /**
  * Available protocols to connect with
@@ -247,7 +250,7 @@ export class EventClient<
    * @param event Event
    */
   handle(event: EventProtocol<T>["server"]): void {
-    if (this.options.debug) console.debug("[S->C]", event);
+    if (this.options.debug) console.debug("[S->C]", redactEventForLog(event));
     switch (event.type) {
       case "Ping":
         this.send({

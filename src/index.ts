@@ -5,7 +5,9 @@ export type {
   ClientOptions,
   ConfigLimits,
   ConfigUserLimits,
+  Events,
   Session as PrivateSession,
+  VoiceMoveRequest,
 } from "./Client.js";
 export * from "./classes/index.js";
 export * from "./collections/index.js";

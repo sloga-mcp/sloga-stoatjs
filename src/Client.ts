@@ -86,6 +86,18 @@ export type ClientConfiguration = RevoltConfig & {
 };
 
 /**
+ * Private voice move request for this user: move from voice channel `from`
+ * to `to` on SFU `node`
+ */
+export type VoiceMoveRequest = {
+  from: string;
+  to: string;
+  node: string;
+  url?: string;
+  token?: string;
+};
+
+/**
  * Events provided by the client
  */
 export type Events = {
@@ -219,6 +231,25 @@ export type Events = {
 
   voiceChannelJoin: [channel: Channel, userId: string];
   voiceChannelLeave: [channel: Channel, userId: string];
+
+  /**
+   * A user was moved into `channel` from another voice channel
+   * (`fromChannelId`). The roster is already updated on whichever of the
+   * two channels are cached by the time this fires.
+   */
+  voiceChannelMove: [channel: Channel, userId: string, fromChannelId: string];
+
+  /**
+   * PRIVATE (this user's topic only): this user is being moved from voice
+   * channel `from` to `to` on SFU `node`. `token` is present for the
+   * bound session of a device-qualified identity, or for every session when
+   * the identity is bare (media E2EE off); it is absent when a qualified
+   * identity has no bound session. `url` is present whenever the node has a
+   * public URL. A token does not mean this connection is in the call: decide
+   * with the client's move policy. The token is a live SFU credential: never
+   * log it or forward it anywhere.
+   */
+  voiceMoveRequested: [event: VoiceMoveRequest];
 
   /**
    * A soundboard sound was triggered in a voice call (channel topic).
