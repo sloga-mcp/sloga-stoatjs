@@ -20,7 +20,7 @@ import type {
   User,
 } from "stoat-api";
 
-import type { Client } from "../Client.js";
+import type { Client, Events } from "../Client.js";
 import type { EventData, EventRsvpData } from "../classes/CalendarEvent.js";
 import type { ChannelFollowData } from "../classes/ChannelFollow.js";
 import type { E2EEClientMessage, E2EEServerEvent } from "../classes/E2EE.js";
@@ -39,6 +39,8 @@ import { VoiceParticipant } from "../classes/VoiceParticipant.js";
 import { UNREAD_COUNT_CAP } from "../hydration/channelUnread.js";
 import type { WatchSessionData } from "../lib/watch.js";
 import { hydrate } from "../hydration/index.js";
+
+import { redactEventForLog } from "./EventClient.js";
 
 /**
  * Version 1 of the events protocol
@@ -228,48 +230,54 @@ type ServerMessage =
        * The server moved this user to another voice channel. Every sender
        * goes through the backend's one emitter,
        * `move_user_to_voice_channel_expecting` (core database
-       * `voice/mod.rs`), which is reached from two places: a moderator's
-       * move (the member edit route, `member_edit.rs`) and the AFK idle
+       * `voice/mod.rs`), which is reached from two places: the member edit
+       * route (`member_edit.rs`: a moderator's move, or the user moving
+       * themselves from the session that owns their call) and the AFK idle
        * sweep in crond (`afk_sweep.rs`), which has no acting user. Nothing on
        * the wire says which one it was.
        *
-       * PRIVATE topic — the moved user only. The server sends this BEFORE it
-       * evicts the source connection(s) from the old room, and evicts them
-       * right after, so a client that ignores it is left in no call at all.
+       * Delivered to ONE SESSION: the one recorded as owning the user's
+       * participant in `from`, never to every session of the user. The
+       * server sends this BEFORE it evicts the source connection from the
+       * old room, so a client that ignores it is left in no call at all.
        *
-       * `node` is the node NAME (a key into the server's livekit config) and
-       * is not connectable; it is kept for parity with the wire event. `url`
-       * is the one to dial.
+       * Every optional field below is ABSENT (not `null`) when the server
+       * does not send it. Re-emitted as `voiceMoveRequested` (see
+       * `VoiceMoveRequest` in `Client.ts` for what each field means to the
+       * receiving session).
        */
       type: "UserMoveVoiceChannel";
-      node: string;
-      url: string;
       /**
-       * The session the `token` below was minted for — the server knows
-       * exactly which participant identity it issued, and this says so.
-       * Additive; absent means the server could not identify the device.
-       *
-       * This is the addressing the private topic itself cannot give: the
-       * event reaches every session of the moved user (see above), and the
-       * token is minted ONCE, for one identity, so two sessions acting on it
-       * race and the SFU evicts one of them on duplicate identity. The
-       * consumer must compare this against its OWN device id and act only on
-       * a match. This library deliberately does not gate on it — it does not
-       * know which device it is running as.
+       * The node NAME (a key into the server's livekit config). Not
+       * connectable; kept for parity with the wire event. Dial `url`.
+       */
+      node: string;
+      /**
+       * Public LiveKit URL of the destination node. Absent when the node has
+       * no public URL configured.
+       */
+      url?: string;
+      /**
+       * Device suffix of the identity `token` was minted for, sent only when
+       * the moved connection is proven the receiving session's. Addressing
+       * only: absent means "not named", never "any device".
        */
       device_id?: string;
       /**
-       * The SOURCE connection's per-connection nonce — the LiveKit token
+       * The SOURCE connection's per-connection nonce: the LiveKit token
        * attribute `"conn"` of the connection being moved, never the new
-       * token's. It addresses exactly one connection of the user, which
-       * `device_id` cannot do for sessions that join without a device id.
-       * Absent from older servers, or when the SFU does not propagate token
-       * attributes.
+       * token's. Present only when the SFU reported one and the moved
+       * connection is proven the receiving session's.
        */
       conn_nonce?: string;
       from: string;
       to: string;
-      token: string;
+      /**
+       * The destination token, present only when the server minted one for
+       * the receiving session's recorded seat kind. A live SFU credential:
+       * never log it (the debug log goes through `redactEventForLog`).
+       */
+      token?: string;
     }
   | {
       /**
@@ -638,7 +646,7 @@ export async function handleEvent(
   setReady: Setter<boolean>,
 ): Promise<void> {
   if (client.options.debug) {
-    console.debug("[S->C]", event);
+    console.debug("[S->C]", redactEventForLog(event));
   }
 
   switch (event.type) {
@@ -1502,36 +1510,35 @@ export async function handleEvent(
       break;
     }
     case "VoiceChannelMove": {
-      // voice-ingress also publishes a `VoiceChannelLeave` for `from` when the
-      // moved seat leaves it, so that Leave may arrive before or after this
-      // event. Both orders converge on the same rosters: the Leave touches only
-      // `from`, both delete the user there, and deleting an absent entry is a
-      // no-op. This event still clears `from` itself, because the Leave can be
-      // late or lost.
+      // Published on the DESTINATION channel's topic only (voice-ingress,
+      // `.p(to)`). Observers of the source get the server's own
+      // `VoiceChannelLeave` for `from`, so none is synthesized here, and no
+      // voiceChannelJoin is emitted for the move. That Leave may arrive
+      // before or after this event; both orders converge on the same
+      // rosters, since both delete the user from `from` and deleting an
+      // absent entry is a no-op. This event still clears `from` itself,
+      // because the Leave can be late or lost.
       //
-      // Each half is applied on its own: `getOrPartial` returns undefined when
-      // the channel is unknown and partials are off, and leaving the user
-      // rendered in a channel they are no longer in is the visible bug, so the
-      // half we can resolve is still worth doing. The emit needs both channels
-      // to be meaningful, so it only fires when both resolved.
+      // Each half is applied on its own: `getOrPartial` returns undefined
+      // when the channel is unknown and partials are off, and leaving the
+      // user rendered in a channel they are no longer in is the visible bug,
+      // so the half we can resolve is still worth doing. Both halves go in
+      // one batch so no observer sees the user in both channels or neither.
       const fromChannel = client.channels.getOrPartial(event.from);
-      if (fromChannel) {
-        fromChannel.voiceParticipants.delete(event.user);
-      }
-
       const toChannel = client.channels.getOrPartial(event.to);
-      if (toChannel) {
-        toChannel.voiceParticipants.set(
+      batch(() => {
+        fromChannel?.voiceParticipants.delete(event.user);
+        toChannel?.voiceParticipants.set(
           event.user,
           new VoiceParticipant(client, event.state),
         );
-      }
+      });
 
       // Caches first, emit after: consumers read the channel state as it is
-      // AFTER the event (see the outgoing ring policy, which counts
-      // participants straight off the channel inside its handler).
-      if (fromChannel && toChannel) {
-        client.emit("voiceChannelMove", fromChannel, toChannel, event.user);
+      // AFTER the event. Only the destination is needed to be meaningful
+      // (the source travels as an id), so a cached destination is enough.
+      if (toChannel) {
+        client.emit("voiceChannelMove", toChannel, event.user, event.from);
       }
       break;
     }
@@ -1544,32 +1551,34 @@ export async function handleEvent(
       break;
     }
     case "UserMoveVoiceChannel": {
-      // A pure re-emit — no cache mutation. The roster belongs to the
-      // channel-topic `VoiceChannelMove` above, which every client receives;
-      // touching `voiceParticipants` here would double-apply it for the moved
-      // user.
+      // A pure re-emit, no cache mutation. The roster belongs to the
+      // channel-topic `VoiceChannelMove` above; touching `voiceParticipants`
+      // here would double-apply it for the moved user.
       //
-      // Like every private topic this reaches EVERY session of the target,
-      // including devices that are not in the call at all. This library has no
-      // idea which session (if any) holds the live connection, so it does not
-      // gate — the consumer must check that it is actually in the call before
-      // acting on the token, or an idle second device will dial into the new
-      // room on its own. `deviceId` is what makes that check exact rather than
-      // a guess: it names the session the token was minted for. `connNonce`,
-      // when present, is sharper still: it names the one source connection.
+      // The server publishes this to the ONE session recorded as owning the
+      // call in `from`, but this library still does not gate: it cannot see
+      // which connection it holds, so the consumer's move policy decides
+      // (`connNonce` when present, else connected to `from`). A token's
+      // presence is not an in-call signal, and its absence is normal (the
+      // consumer then joins `to` through the regular join route). The token
+      // is a live SFU credential: pass it through, never log it (the debug
+      // log goes through `redactEventForLog`).
       //
-      // `?? undefined` so consumers have ONE absent value to test — an absent
-      // key and an explicit null both arrive here as undefined. `connNonce`
-      // uses `||` so an empty string also normalizes to undefined: an empty
-      // nonce addresses nothing.
-      client.emit("userMoveVoiceChannel", {
+      // `|| undefined` so consumers have ONE absent value to test: an absent
+      // key, an explicit null and an empty string all arrive as undefined.
+      // An empty URL, token, device or nonce names nothing.
+      //
+      // `satisfies keyof Events`: `emit` has a catch-all `string` overload,
+      // so a stale or misspelled event name would compile and leave every
+      // listener deaf. This pins the name to the declared event.
+      client.emit("voiceMoveRequested" satisfies keyof Events, {
         node: event.node,
-        url: event.url,
-        deviceId: event.device_id ?? undefined,
+        url: event.url || undefined,
+        deviceId: event.device_id || undefined,
         connNonce: event.conn_nonce || undefined,
         from: event.from,
         to: event.to,
-        token: event.token,
+        token: event.token || undefined,
       });
       break;
     }

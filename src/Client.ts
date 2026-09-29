@@ -86,6 +86,82 @@ export type ClientConfiguration = RevoltConfig & {
 };
 
 /**
+ * The server moved this user from voice channel `from` to `to`, and is
+ * telling the one session that owns the call. Emitted as `voiceMoveRequested`.
+ *
+ * The move may come from a moderator, from the server's idle (AFK) sweep, or
+ * from the user moving themselves from the session that owns their call;
+ * nothing on the wire says which.
+ *
+ * Delivered to ONE SESSION: the one the server recorded as owning this
+ * user's participant in `from`. No other session of the user receives it. It
+ * is sent BEFORE the source connection is evicted from `from`, so a client
+ * that ignores it is left in no call at all.
+ *
+ * Camel-cased like the rest of this library's public surface (the wire
+ * fields are `device_id` and `conn_nonce`). Every optional field is
+ * `undefined` when it is absent, `null` or empty on the wire, so consumers
+ * have ONE absent value to test.
+ */
+export type VoiceMoveRequest = {
+  /**
+   * Source voice channel id
+   */
+  from: string;
+
+  /**
+   * Destination voice channel id
+   */
+  to: string;
+
+  /**
+   * LiveKit node NAME (a key into the server's node config). Kept for wire
+   * parity; it is NOT connectable. Dial `url`.
+   */
+  node: string;
+
+  /**
+   * `wss://` address of the destination node, the one to dial with `token`.
+   * Absent when the node has no public URL.
+   */
+  url?: string;
+
+  /**
+   * Destination SFU token, minted for exactly the seat kind this session was
+   * recorded as holding at its join: a bare token for a bare seat, or a
+   * device token for the device named by `deviceId`.
+   *
+   * Absent whenever the server would not mint one for this session (a seat
+   * kind it cannot read, a device revoked or bound to another session, media
+   * E2EE off for a device seat, or a moved connection that is not the
+   * recorded seat). The client then joins `to` through the regular join
+   * route, which checks the binding itself. Never assume a token.
+   *
+   * A live SFU credential: never log it or forward it anywhere.
+   */
+  token?: string;
+
+  /**
+   * Device suffix of the identity `token` was minted for. ADDRESSING ONLY,
+   * never a grant: absent means "not named", never "any device". Sent only
+   * when the moved connection is proven to be this session's.
+   */
+  deviceId?: string;
+
+  /**
+   * The SOURCE connection's per-connection nonce: the LiveKit token attribute
+   * `"conn"` of the connection being moved, never the new token's. When
+   * present it IS the gate: act only on a matching connection (a connection
+   * to `from` under another nonce was moved elsewhere).
+   *
+   * Absent, like `deviceId`, when the SFU reported none or the moved
+   * connection is not proven to be this session's; the client then acts
+   * when it is connected to `from`.
+   */
+  connNonce?: string;
+};
+
+/**
  * Events provided by the client
  */
 export type Events = {
@@ -221,53 +297,28 @@ export type Events = {
   voiceChannelLeave: [channel: Channel, userId: string];
 
   /**
-   * A participant was moved between two voice channels (channel topic). The
-   * server also publishes a `voiceChannelLeave` for `from` when the moved
-   * seat leaves it, so that Leave may arrive before or after this event. Both
-   * orders converge on the same rosters: the Leave touches only `from`, both
-   * delete the user there, and deleting an absent entry is a no-op. This
-   * event still clears `from` itself, because the Leave can be late or lost.
+   * A user was moved into `channel` from another voice channel
+   * (`fromChannelId`).
+   *
+   * Published on the DESTINATION channel's topic only. Observers of the
+   * source get the server's own `voiceChannelLeave` for `fromChannelId`,
+   * which may arrive before or after this event; both orders converge on the
+   * same rosters, since both delete the user from the source and deleting an
+   * absent entry is a no-op.
+   *
+   * The rosters of whichever of the two channels are cached are already
+   * updated when this fires. It fires only when the destination is cached.
    */
-  voiceChannelMove: [from: Channel, to: Channel, userId: string];
+  voiceChannelMove: [channel: Channel, userId: string, fromChannelId: string];
 
   /**
-   * THIS user was moved to another voice channel; carries the token for the
-   * new room (private topic). The move may come from a moderator or from the
-   * server's idle sweep, and nothing on the wire says which.
-   *
-   * `node` is the node name and is not connectable — dial `url`.
-   *
-   * Like every private topic this reaches EVERY session of this user,
-   * including ones not in the call. The server sends it BEFORE evicting the
-   * source connection(s) from the old room, and evicts them right after. The
-   * consumer must confirm it holds the addressed connection before acting on
-   * the token: identified by `connNonce` when present, else by `deviceId`.
-   *
-   * `deviceId` is the device suffix of the identity the token was minted for
-   * (`undefined` for a bare identity, or a server that predates the field).
-   * It is the fallback test when either side lacks a `connNonce`. It names a
-   * DEVICE, not a connection, since tabs of one browser share it, so only
-   * `connNonce` can tell sibling connections on one device apart.
-   * Camel-cased here like the rest of this library's public surface; the wire
-   * field is `device_id`.
+   * THIS session is being moved to another voice channel (see
+   * `VoiceMoveRequest` for who receives it, how it addresses a connection,
+   * and when it carries a token). A token does not mean this connection is
+   * in the call: decide with the client's move policy. The token is a live
+   * SFU credential: never log it or forward it anywhere.
    */
-  userMoveVoiceChannel: [
-    move: {
-      node: string;
-      url: string;
-      deviceId: string | undefined;
-      /**
-       * The SOURCE connection's per-connection nonce (LiveKit token attribute
-       * `"conn"`), which addresses exactly one connection of this user.
-       * `undefined` when the server predates the field or the SFU does not
-       * propagate token attributes. The wire field is `conn_nonce`.
-       */
-      connNonce: string | undefined;
-      from: string;
-      to: string;
-      token: string;
-    },
-  ];
+  voiceMoveRequested: [event: VoiceMoveRequest];
 
   /**
    * A soundboard sound was triggered in a voice call (channel topic).

@@ -286,6 +286,25 @@ export class ServerMember {
   }
 
   /**
+   * Move this member to another voice channel in the same server.
+   *
+   * Moving another member needs MoveMembers on the source and destination
+   * channels, Connect on the destination and a higher rank. Moving yourself
+   * needs Connect on the destination and respects its user limit; a
+   * device-bound call must be moved from that device's session.
+   *
+   * The server may refuse with 403 MissingPermission / NotElevated,
+   * 400 NotAVoiceChannel / InvalidOperation / NotConnected /
+   * FailedValidation / CannotJoinCall / LiveKitUnavailable,
+   * 401 NotAuthenticated, 404 UnknownChannel, or 409 VideoCallFull /
+   * MlsCallFull.
+   * @param channelId Target voice channel id
+   */
+  async moveToVoiceChannel(channelId: string): Promise<void> {
+    await this.edit({ voice_channel: channelId });
+  }
+
+  /**
    * Ban this member from the server
    * @param options Ban options
    */
