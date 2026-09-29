@@ -5,18 +5,29 @@ import type { Client } from "../Client.js";
 import { File } from "./File.js";
 
 /**
+ * Audio embed as sent by the API (direct link to an audio file)
+ */
+export type AudioEmbedData = {
+  type: "Audio";
+  url: string;
+  content_type: string;
+  size?: number;
+  filename?: string;
+};
+
+/**
  * Message Embed
  */
 export abstract class MessageEmbed {
   protected client?: Client;
-  readonly type: Embed["type"];
+  readonly type: Embed["type"] | "Audio";
 
   /**
    * Construct Embed
    * @param client Client
    * @param type Type
    */
-  constructor(client?: Client, type: Embed["type"] = "None") {
+  constructor(client?: Client, type: Embed["type"] | "Audio" = "None") {
     this.client = client;
     this.type = type;
   }
@@ -27,7 +38,7 @@ export abstract class MessageEmbed {
    * @param embed Data
    * @returns Embed
    */
-  static from(client: Client, embed: Embed): MessageEmbed {
+  static from(client: Client, embed: Embed | AudioEmbedData): MessageEmbed {
     switch (embed.type) {
       case "Image":
         return new ImageEmbed(client, embed);
@@ -37,6 +48,8 @@ export abstract class MessageEmbed {
         return new WebsiteEmbed(client, embed);
       case "Text":
         return new TextEmbed(client, embed);
+      case "Audio":
+        return new AudioEmbed(client, embed);
       default:
         return new UnknownEmbed(client);
     }
@@ -105,6 +118,43 @@ export class VideoEmbed extends MessageEmbed {
    */
   get proxiedURL(): string | undefined {
     return this.client?.proxyFile(this.url);
+  }
+}
+
+/**
+ * Audio Embed
+ */
+export class AudioEmbed extends MessageEmbed {
+  readonly url: string;
+  readonly contentType: string;
+  readonly size?: number;
+  readonly filename?: string;
+
+  /**
+   * Construct Audio Embed
+   * @param client Client
+   * @param embed Embed
+   */
+  constructor(client: Client, embed: Omit<AudioEmbedData, "type">) {
+    super(client, "Audio");
+
+    this.url = embed.url;
+    this.contentType = embed.content_type;
+    this.size = embed.size;
+    this.filename = embed.filename;
+  }
+
+  /**
+   * Proxied audio URL (January's streaming audio route), or undefined
+   * when January is unavailable; never the raw third-party URL
+   */
+  get proxiedURL(): string | undefined {
+    const january = this.client?.configuration?.features.january;
+    if (january?.enabled) {
+      return `${january.url}/audio?url=${encodeURIComponent(this.url)}`;
+    }
+
+    return undefined;
   }
 }
 

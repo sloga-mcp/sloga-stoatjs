@@ -1,4 +1,5 @@
 import type {
+  File as APIFile,
   User as APIUser,
   BotInformation,
   RelationshipStatus,
@@ -7,6 +8,7 @@ import type {
 
 import type { Client } from "../Client.js";
 import { File } from "../classes/File.js";
+import type { NameStyle } from "../types/perks.js";
 
 import type { Hydrate } from "./index.js";
 
@@ -33,6 +35,11 @@ export type UserConnection = {
  * `relationship_note` (note attached to an incoming friend request; only
  * ever present for the receiving session user) and `profile_visibility`
  * (self-only profile privacy setting) are newer than the published types.
+ * `name_style` (already filtered by the server to what the user's perks
+ * allow), `perks` (bitfield, skipped when 0; normally only sent for the
+ * session user, though editing another account as staff or as its bot owner
+ * returns that account's value) and `custom_badge` are likewise newer than
+ * the published types.
  */
 type APIUserExt = APIUser & {
   e2ee_enabled?: boolean;
@@ -41,6 +48,9 @@ type APIUserExt = APIUser & {
   profile_visibility?: ProfileVisibility;
   /** Pronouns are also newer than the published types; absent = unset. */
   pronouns?: string;
+  name_style?: NameStyle;
+  perks?: number;
+  custom_badge?: { image: APIFile; label: string };
 };
 
 /** Who may fetch the user's profile page */
@@ -70,6 +80,10 @@ export type HydratedUser = {
   };
   bot?: BotInformation;
   connections: UserConnection[];
+
+  nameStyle?: NameStyle;
+  perks: number;
+  customBadge?: { image: File; label: string };
 };
 
 export const userHydration: Hydrate<APIUserExt, HydratedUser> = {
@@ -79,6 +93,8 @@ export const userHydration: Hydrate<APIUserExt, HydratedUser> = {
     e2ee_enabled: "e2eeEnabled",
     relationship_note: "relationshipNote",
     profile_visibility: "profileVisibility",
+    name_style: "nameStyle",
+    custom_badge: "customBadge",
   },
   functions: {
     id: (user) => user._id,
@@ -108,12 +124,28 @@ export const userHydration: Hydrate<APIUserExt, HydratedUser> = {
     bot: (user) => user.bot!,
     // Serialized only when non-empty, so absence = none
     connections: (user) => user.connections ?? [],
+
+    nameStyle: (user) => user.name_style,
+    // Only runs when the key is present, so a partial update without it
+    // keeps the known value. Normally only sent for the session user (an
+    // edit of another account also returns that account's value), and the
+    // session user's own updates carry an explicit 0 when the last perk is
+    // lost
+    perks: (user) => user.perks ?? 0,
+    customBadge: (user, ctx) =>
+      user.custom_badge && {
+        image: new File(ctx as Client, user.custom_badge.image),
+        label: user.custom_badge.label,
+      },
   },
   initialHydration: () => ({
     relationship: "None",
     e2eeEnabled: false,
     profileVisibility: "Everyone",
     connections: [],
+    // Skipped by the server when 0 and normally only sent for the session
+    // user
+    perks: 0,
   }),
 };
 
@@ -132,6 +164,15 @@ export enum UserBadges {
   EarlyAdopter = 256,
   ReservedRelevantJokeBadge1 = 512,
   ReservedRelevantJokeBadge2 = 1024,
+  // 2048 is reserved
+  /** Joined through a friend's referral */
+  Welcomed = 4096,
+  /** Referred friends to Sloga */
+  Recruiter = 8192,
+  /** Referred many friends to Sloga */
+  RecruiterElite = 16384,
+  /** Made a major donation to support Sloga */
+  Patron = 32768,
 }
 
 /**

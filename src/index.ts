@@ -1,6 +1,12 @@
 export * as API from "stoat-api";
 export { Client } from "./Client.js";
-export type { ClientOptions, Session as PrivateSession } from "./Client.js";
+export type {
+  ClientConfiguration,
+  ClientOptions,
+  ConfigLimits,
+  ConfigUserLimits,
+  Session as PrivateSession,
+} from "./Client.js";
 export * from "./classes/index.js";
 export * from "./collections/index.js";
 export { ConnectionState, EventClient } from "./events/EventClient.js";
@@ -13,3 +19,4 @@ export type { HydratedUser } from "./hydration/user.js";
 export * from "./lib/regex.js";
 export type * from "./lib/watch.js";
 export * from "./permissions/definitions.js";
+export * from "./types/perks.js";
