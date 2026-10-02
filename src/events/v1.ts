@@ -868,6 +868,10 @@ export async function handleEvent(
       break;
     }
     case "MessageDelete": {
+      // Emitted for every deletion, cached or not, so views that only hold
+      // ids or counts (the forum list) can still react to it.
+      client.emit("messageDeleteId", event.id, event.channel);
+
       if (client.messages.getOrPartial(event.id)) {
         const message = client.messages.getUnderlyingObject(event.id);
         client.emit("messageDelete", message);

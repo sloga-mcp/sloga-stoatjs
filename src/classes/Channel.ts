@@ -31,6 +31,7 @@ import type { Server } from "./Server.js";
 import type { ServerMember } from "./ServerMember.js";
 import type {
   DataCreateForumPost,
+  ForumLayout,
   ForumPostResponse,
   ForumPostsResponse,
   ForumSortOrder,
@@ -331,6 +332,16 @@ export class Channel {
    */
   get forceSort(): boolean {
     return this.#collection.getUnderlyingObject(this.id).forceSort || false;
+  }
+
+  /**
+   * Layout the post browse view opens in for readers who have not picked
+   * their own (forums only). Older servers omit it, which reads as Modern.
+   */
+  get defaultLayout(): ForumLayout {
+    return (
+      this.#collection.getUnderlyingObject(this.id).defaultLayout ?? "Modern"
+    );
   }
 
   /**
@@ -1270,9 +1281,19 @@ export class Channel {
    * @param params sort: latest_activity (default) | creation_date;
    *   tag: filter to a tag id; archived: list archived posts instead;
    *   before: cursor on the sort key; limit: 1..=100;
-   *   includeStarters: also fetch each post's starter message
+   *   includeStarters: also fetch each post's starter message;
+   *   includeStats: also fetch each post's reply count and last message
+   *   (the server omits both without ReadMessageHistory);
+   *   includeUsers: also fetch the users and members who created the posts
+   *   and wrote the returned starters and last messages
    * @requires `Forum`
-   * @returns Posts, plus starter messages when requested
+   * @returns Posts, plus starter messages when requested; `lastMessages`
+   *   holds each post's last message (empty when not sent); `stats` maps a
+   *   post id to its reply count and last message id, and is `undefined`
+   *   (not an empty map) whenever the server sent no stats — not requested,
+   *   no ReadMessageHistory, or an older server. Fetched users and members
+   *   are cached on the client rather than returned. Counts are per-fetch
+   *   values and are not kept up to date on the post.
    */
   async fetchPosts(params?: {
     /** Ignored by forums with `forceSort` set; those answer in their own order. */
@@ -1282,8 +1303,16 @@ export class Channel {
     before?: string;
     limit?: number;
     includeStarters?: boolean;
-  }): Promise<{ posts: Channel[]; starters?: Message[] }> {
-    const { includeStarters, ...rest } = params ?? {};
+    includeStats?: boolean;
+    includeUsers?: boolean;
+  }): Promise<{
+    posts: Channel[];
+    starters?: Message[];
+    lastMessages: Message[];
+    stats?: Map<string, { replies: number; lastMessageId?: string }>;
+  }> {
+    const { includeStarters, includeStats, includeUsers, ...rest } =
+      params ?? {};
     const response = (await this.#collection.apiReq(
       "GET",
       `/channels/${this.id}/posts`,
@@ -1291,18 +1320,46 @@ export class Channel {
         query: {
           ...rest,
           include_starters: includeStarters,
+          // Only sent when set, so callers that never ask for them send
+          // exactly the query they did before these existed.
+          ...(includeStats ? { include_stats: true } : {}),
+          ...(includeUsers ? { include_users: true } : {}),
         },
       },
     )) as ForumPostsResponse;
 
-    return batch(() => ({
-      posts: response.posts.map((post) =>
-        this.#collection.getOrCreate(post._id, post),
-      ),
-      starters: response.starters?.map((starter) =>
-        this.#collection.client.messages.getOrCreate(starter._id, starter),
-      ),
-    }));
+    return batch(() => {
+      // Post creators and message authors, cached for the rows to resolve.
+      response.users?.forEach((user) =>
+        this.#collection.client.users.getOrCreate(user._id, user),
+      );
+      response.members?.forEach((member) =>
+        this.#collection.client.serverMembers.getOrCreate(member._id, member),
+      );
+
+      return {
+        posts: response.posts.map((post) =>
+          this.#collection.getOrCreate(post._id, post),
+        ),
+        starters: response.starters?.map((starter) =>
+          this.#collection.client.messages.getOrCreate(starter._id, starter),
+        ),
+        lastMessages: (response.last_messages ?? []).map((message) =>
+          this.#collection.client.messages.getOrCreate(message._id, message),
+        ),
+        stats: response.stats
+          ? new Map<string, { replies: number; lastMessageId?: string }>(
+              response.stats.map((entry) => [
+                entry._id,
+                {
+                  replies: entry.replies,
+                  lastMessageId: entry.last_message_id,
+                },
+              ]),
+            )
+          : undefined,
+      };
+    });
   }
 
   /**

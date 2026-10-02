@@ -5,7 +5,9 @@
 
 import type {
   File as APIFile,
+  Member as APIMember,
   Message as APIMessage,
+  User as APIUser,
   DataMessageSend,
 } from "stoat-api";
 
@@ -26,6 +28,12 @@ export type ForumSortOrder =
   | "LatestActivity"
   | "CreationDate"
   | "Alphabetical";
+
+/**
+ * How a forum lists its posts: `Modern` = preview cards, `Classic` = one row
+ * per post, `ClassicPlus` = a table with reply and last-post columns.
+ */
+export type ForumLayout = "Modern" | "Classic" | "ClassicPlus";
 
 /**
  * Serialized `v0::Channel::Forum` — a sixth channel variant. Posts are
@@ -57,6 +65,11 @@ export interface ForumChannelData {
    * otherwise 1 up to two years (1_051_200). Omitted by older servers.
    */
   default_auto_archive_minutes?: number;
+  /**
+   * Layout the browse view opens on; each reader may override it locally.
+   * Omitted by older servers, which means `Modern`.
+   */
+  default_layout?: ForumLayout;
 }
 
 /** Tag definition as submitted through `PATCH /channels/{id}` (`tags`). */
@@ -90,6 +103,19 @@ export interface ForumPostResponse {
   message: APIMessage;
 }
 
+/**
+ * Reply count and last message of one post, as returned by
+ * `GET /channels/{forum}/posts?include_stats=true`.
+ */
+export interface ForumPostStats {
+  /** Id of the post. */
+  _id: string;
+  /** Messages in the post other than its starter. */
+  replies: number;
+  /** Newest message in the post; the starter's id if nobody replied. */
+  last_message_id?: string;
+}
+
 /** `GET /channels/{forum}/posts` response. */
 export interface ForumPostsResponse {
   posts: ThreadChannelData[];
@@ -98,4 +124,23 @@ export interface ForumPostsResponse {
    * set); each message's id equals its post's id.
    */
   starters?: APIMessage[];
+  /**
+   * One entry per post on this page (present when `include_stats` was set
+   * and the caller has ReadMessageHistory). Absent, never empty, otherwise,
+   * and always absent from older servers.
+   */
+  stats?: ForumPostStats[];
+  /**
+   * Last message of each post on this page, by `stats[].last_message_id`;
+   * present under the same conditions as `stats`.
+   */
+  last_messages?: APIMessage[];
+  /**
+   * Users referenced by this page (present when `include_users` was set):
+   * every post's creator, plus the authors of the starters and last
+   * messages when the caller has ReadMessageHistory.
+   */
+  users?: APIUser[];
+  /** Server members for `users` (present when `include_users` was set). */
+  members?: APIMember[];
 }

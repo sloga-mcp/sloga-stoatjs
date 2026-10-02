@@ -182,6 +182,11 @@ export type Events = {
   messageCreate: [message: Message];
   messageUpdate: [message: Message, previousMessage: HydratedMessage];
   messageDelete: [message: HydratedMessage];
+  /**
+   * Emitted for every message deletion, including messages this client has
+   * not loaded (unlike `messageDelete`, which only fires for cached messages).
+   */
+  messageDeleteId: [id: string, channelId: string];
   messageDeleteBulk: [messages: HydratedMessage[], channel?: Channel];
   messageReactionAdd: [message: Message, userId: string, emoji: string];
   messageReactionRemove: [message: Message, userId: string, emoji: string];

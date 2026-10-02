@@ -6,6 +6,7 @@ import type { Client } from "../Client.js";
 import { File } from "../classes/File.js";
 import type {
   ForumChannelData,
+  ForumLayout,
   ForumSortOrder,
   ForumTag,
 } from "../classes/Forum.js";
@@ -60,6 +61,8 @@ export type HydratedChannel = {
   defaultSort?: ForumSortOrder;
   /** Whether `defaultSort` is imposed on every reader of this forum. */
   forceSort: boolean;
+  /** Layout this forum shows readers who have not picked their own. */
+  defaultLayout?: ForumLayout;
   /**
    * Default auto-archive duration (minutes) for new posts in this forum.
    * 0 means never auto-archive; undefined means the server default applies.
@@ -99,6 +102,7 @@ export const channelHydration: Hydrate<
     require_tag: "requireTag",
     default_sort: "defaultSort",
     force_sort: "forceSort",
+    default_layout: "defaultLayout",
     default_auto_archive_minutes: "defaultAutoArchiveMinutes",
     applied_tags: "appliedTags",
   },
@@ -167,6 +171,7 @@ export const channelHydration: Hydrate<
     requireTag: (channel) => channel.require_tag || false,
     defaultSort: (channel) => channel.default_sort ?? "LatestActivity",
     forceSort: (channel) => channel.force_sort || false,
+    defaultLayout: (channel) => channel.default_layout ?? "Modern",
     defaultAutoArchiveMinutes: (channel) =>
       channel.default_auto_archive_minutes,
     appliedTags: (channel) => channel.applied_tags ?? [],
