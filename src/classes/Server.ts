@@ -496,10 +496,9 @@ export class Server {
       if (server.id) {
         client.emit(leaveEvent ? "serverLeave" : "serverDelete", server);
 
-        // channelIds only holds the channels the server was hydrated with, so
-        // threads, forum posts and channels created later are missing from it.
-        // Sweep every cached channel pointing at this server too, snapshotted
-        // before anything is deleted.
+        // channelIds lists only top-level channels; threads and forum posts
+        // are never in it. Sweep every cached channel pointing at this server
+        // too, snapshotted before anything is deleted
         const ids = new Set(this.channelIds);
         for (const channel of client.channels.filter(
           (channel) => channel.serverId === this.id,
@@ -516,9 +515,9 @@ export class Server {
         for (const id of ids) {
           const channel = client.channels.get(id);
           if (channel) {
-            // A pending typing timer would re-dispatch ChannelStopTyping for
-            // a channel that is gone, and a held thread instance must not
-            // still list us as a member
+            // Clear pending typing timers so they cannot recreate the channel
+            // as a partial (when partials are on), and so a held thread
+            // instance no longer lists us as a member
             for (const timer of Object.values(channel._typingTimers)) {
               clearTimeout(timer);
             }

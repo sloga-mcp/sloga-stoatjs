@@ -1,13 +1,12 @@
 /**
  * Leaving or losing a server purges everything cached under it.
  *
- * `Server.$delete` used to delete only `channelIds`, the channels the server
- * was hydrated with. Threads, forum posts and channels created later stayed
- * in `client.channels`, and every message in every channel stayed in
- * `client.messages`, after the server itself was gone. These cases pin the
- * sweep: every channel pointing at the server goes, with its messages, while
- * other servers, DMs and unread rows are left alone, and nothing is fetched
- * or emitted per item.
+ * `Server.$delete` used to delete only `channelIds`, which lists top-level
+ * channels only. Threads and forum posts stayed in `client.channels`, and
+ * every message in every channel stayed in `client.messages`, after the
+ * server itself was gone. These cases pin the sweep: every channel pointing
+ * at the server goes, with its messages, while other servers, DMs and unread
+ * rows are left alone, and nothing is fetched or emitted per item.
  *
  * Run from the package root:
  *
