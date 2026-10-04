@@ -489,24 +489,51 @@ export class Server {
    */
   $delete(leaveEvent?: boolean): void {
     batch(() => {
-      const server = this.#collection.client.servers.getUnderlyingObject(
-        this.id,
-      );
+      const client = this.#collection.client;
+      const server = client.servers.getUnderlyingObject(this.id);
 
       // Avoid race conditions
       if (server.id) {
-        this.#collection.client.emit(
-          leaveEvent ? "serverLeave" : "serverDelete",
-          server,
-        );
+        client.emit(leaveEvent ? "serverLeave" : "serverDelete", server);
 
-        for (const channel of this.channelIds) {
-          this.#collection.client.channels.delete(channel);
+        // channelIds lists only top-level channels; threads and forum posts
+        // are never in it. Sweep every cached channel pointing at this server
+        // too, snapshotted before anything is deleted
+        const ids = new Set(this.channelIds);
+        for (const channel of client.channels.filter(
+          (channel) => channel.serverId === this.id,
+        )) {
+          ids.add(channel.id);
         }
 
+        for (const message of client.messages.filter((message) =>
+          ids.has(message.channelId),
+        )) {
+          client.messages.delete(message.id);
+        }
+
+        for (const id of ids) {
+          const channel = client.channels.get(id);
+          if (channel) {
+            // Clear pending typing timers so they cannot recreate the channel
+            // as a partial (when partials are on), and so a held thread
+            // instance no longer lists us as a member
+            for (const timer of Object.values(channel._typingTimers)) {
+              clearTimeout(timer);
+            }
+
+            channel._typingTimers = {};
+            channel.threadMembers.clear();
+          }
+
+          client.channels.delete(id);
+        }
+
+        // Unread rows are kept on purpose: dropping them would mark every
+        // channel fully unread after rejoining in the same session
         this.#collection.delete(this.id);
       }
-      // TODO: delete members, emoji, etc
+      // TODO: members, emoji and other per-server collections are left behind
     });
   }
 
