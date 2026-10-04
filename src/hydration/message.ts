@@ -207,21 +207,26 @@ export const messageHydration: Hydrate<
  */
 export enum MessageFlags {
   /**
-   * Message will not send push / desktop notifications
+   * Message will not send push / desktop notifications.
+   * NOTE: this one is a MASK (`flags & 1`), not a bit position; the server
+   * special-cases it the same way. Read it via `Message.isSuppressed`.
    */
   SuppressNotifications = 1,
   /**
-   * Message will mention all users who can see the channel
+   * Message will mention all users who can see the channel — a bit
+   * POSITION (stored as `1 << 2`), NOT a mask. Test via
+   * {@link messageFlagAtPosition}.
    */
   MentionsEveryone = 2,
   /**
    * Message will mention all users who are online and can see the channel.
-   * This cannot be true if MentionsEveryone is true
+   * This cannot be true if MentionsEveryone is true. A bit POSITION (stored
+   * as `1 << 3`), NOT a mask. Test via {@link messageFlagAtPosition}.
    */
   MentionsOnline = 3,
   /**
    * Message is a bot's response to a slash-command interaction — a bit
-   * POSITION like the values above, NOT a mask. Server-set only (the send
+   * POSITION like the mention flags, NOT a mask. Server-set only (the send
    * path rejects client flags above 7), so with `command_context` it proves
    * the "used /cmd" attribution. Test via {@link messageFlagAtPosition}.
    */
