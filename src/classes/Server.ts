@@ -497,18 +497,32 @@ export class Server {
       if (server.id) {
         client.emit(leaveEvent ? "serverLeave" : "serverDelete", server);
 
+        // channelIds comes from the server's payload, so skip any listed id
+        // whose cached channel belongs elsewhere (DMs, groups and saved
+        // messages have no server). Uncached ids are still swept
+        const ids = new Set<string>();
+        for (const id of this.channelIds ?? []) {
+          const channel = client.channels.get(id);
+          if (!channel || channel.serverId === this.id) {
+            ids.add(id);
+          }
+        }
+
         // channelIds lists only top-level channels; threads and forum posts
         // are never in it. Sweep every cached channel pointing at this server
         // too, snapshotted before anything is deleted
-        const ids = new Set(this.channelIds);
         for (const channel of client.channels.filter(
           (channel) => channel.serverId === this.id,
         )) {
           ids.add(channel.id);
         }
 
-        for (const message of client.messages.filter((message) =>
-          ids.has(message.channelId),
+        // Decrypted end-to-end encrypted rows exist only on this device and
+        // are never server messages, so the purge leaves them alone
+        for (const message of client.messages.filter(
+          (message) =>
+            ids.has(message.channelId) &&
+            client.e2ee?.isEncryptedMessage(message.id) !== true,
         )) {
           client.messages.delete(message.id);
         }

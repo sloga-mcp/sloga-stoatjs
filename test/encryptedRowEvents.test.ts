@@ -10,6 +10,10 @@
  * an encrypted row is ignored without an emit, while a plaintext row, or a
  * client with no E2EE adapter, behaves as before.
  *
+ * Genuine encrypted messages never arrive as Message or
+ * InteractionEphemeralMessage events, so one carrying a trusted id must not
+ * create a row, replace a cached one, emit, or move the channel's unread state.
+ *
  * Run from the package root:
  *
  *   node --test --conditions=browser test/encryptedRowEvents.test.ts
@@ -381,4 +385,138 @@ test("Bulk: a wrapped forged update still leaves the encrypted row alone", async
 
   assert.deepEqual(snapshot(client, ENC), before);
   assert.deepEqual(messageEvents(emitted), []);
+});
+
+// A trusted id whose object is not in the collection, and a fresh id the
+// E2EE layer does not trust
+const GONE = "01K6E000000000000000000008";
+const FRESH = "01K6E000000000000000000009";
+
+// Every emit a created message may produce
+const CREATE_EVENTS = ["messageCreate", "interactionEphemeral"];
+
+/**
+ * Like `setup(true)`, but the adapter also trusts GONE, which is never seeded,
+ * and unreads are counted so a created message would move the channel badge.
+ */
+function setupTrustedAbsent(): Harness {
+  const harness = setup(true);
+  const ids = new Set([ENC, GONE]);
+  (harness.client as unknown as { e2ee: unknown }).e2ee = {
+    isEncryptedMessage: (id: string) => ids.has(id),
+  };
+  (harness.client.options as { syncUnreads: boolean }).syncUnreads = true;
+  assert.equal(harness.client.messages.has(GONE), false);
+  assert.equal(harness.client.messages.has(FRESH), false);
+  return harness;
+}
+
+/** The channel state a created message would move */
+function channelState(client: StoatClient) {
+  const unread = client.channelUnreads.get(DM);
+  return {
+    lastMessageId: client.channels.get(DM)?.lastMessageId,
+    unreadCount: unread?.unreadCount ?? 0,
+    mentions: unread ? [...unread.messageMentionIds] : [],
+  };
+}
+
+function createEvents(emitted: string[]): string[] {
+  return emitted.filter((name) => CREATE_EVENTS.includes(name));
+}
+
+const NEW_MESSAGE_CASES: {
+  name: string;
+  event: (id: string) => ServerEvent;
+  /** The emits when a message is created */
+  emits: string[];
+}[] = [
+  {
+    name: "Message",
+    event: (id) => ({
+      type: "Message",
+      _id: id,
+      channel: DM,
+      author: OTHER,
+      content: FORGED,
+      mentions: [ME],
+    }),
+    emits: ["messageCreate"],
+  },
+  {
+    name: "InteractionEphemeralMessage",
+    event: (id) => ({
+      type: "InteractionEphemeralMessage",
+      message: { _id: id, channel: DM, author: OTHER, content: FORGED },
+    }),
+    emits: ["messageCreate", "interactionEphemeral"],
+  },
+];
+
+for (const { name, event, emits } of NEW_MESSAGE_CASES) {
+  test(`${name}: a trusted id missing from the cache creates nothing`, async () => {
+    const { client, emitted, fire } = setupTrustedAbsent();
+    const before = channelState(client);
+
+    await fire(event(GONE));
+
+    assert.equal(client.messages.has(GONE), false);
+    assert.deepEqual(createEvents(emitted), []);
+    assert.deepEqual(channelState(client), before);
+  });
+
+  test(`${name}: a cached trusted row is left as it is`, async () => {
+    const { client, emitted, fire } = setupTrustedAbsent();
+    const instance = client.messages.get(ENC);
+    const row = snapshot(client, ENC);
+    const before = channelState(client);
+
+    await fire(event(ENC));
+
+    assert.equal(client.messages.get(ENC), instance);
+    assert.deepEqual(snapshot(client, ENC), row);
+    assert.deepEqual(createEvents(emitted), []);
+    assert.deepEqual(channelState(client), before);
+  });
+
+  test(`${name}: an untrusted id is still created`, async () => {
+    const { client, emitted, fire } = setupTrustedAbsent();
+
+    await fire(event(FRESH));
+
+    assert.equal(client.messages.get(FRESH)?.content, FORGED);
+    assert.deepEqual(createEvents(emitted), emits);
+  });
+
+  test(`${name}: without an E2EE adapter the id is created`, async () => {
+    const { client, emitted, fire } = setup(false);
+
+    await fire(event(GONE));
+
+    assert.equal(client.messages.get(GONE)?.content, FORGED);
+    assert.deepEqual(createEvents(emitted), emits);
+  });
+}
+
+test("Message: an untrusted id still moves the channel's unread state", async () => {
+  const { client, fire } = setupTrustedAbsent();
+
+  await fire(NEW_MESSAGE_CASES[0].event(FRESH));
+
+  assert.deepEqual(channelState(client), {
+    lastMessageId: FRESH,
+    unreadCount: 1,
+    mentions: [FRESH],
+  });
+});
+
+test("Bulk: a wrapped Message with a trusted id creates nothing", async () => {
+  const { client, emitted, fire } = setupTrustedAbsent();
+  const before = channelState(client);
+
+  await fire({ type: "Bulk", v: [NEW_MESSAGE_CASES[0].event(GONE)] });
+
+  assert.equal(client.messages.has(GONE), false);
+  assert.deepEqual(createEvents(emitted), []);
+  assert.deepEqual(channelState(client), before);
 });

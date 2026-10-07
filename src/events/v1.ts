@@ -741,6 +741,11 @@ export async function handleEvent(
       break;
     }
     case "Message": {
+      // Genuine encrypted messages never arrive as Message events; the E2EE
+      // layer creates them locally. A Message event carrying a trusted id must
+      // never create or replace a row shown as decrypted, so it is dropped
+      // before any hydration, unread count or emit.
+      if (isEncryptedRow(client, event._id)) break;
       batch(() => {
         const channel = client.channels.get(event.channel);
 
@@ -1722,6 +1727,9 @@ export async function handleEvent(
       // message, but deliberately skips the lastMessageId bump and
       // unread/mention processing: acks must never reference it.
       const message = event.message;
+      // As with Message: a trusted id never arrives this way, so it must not
+      // create a row that would be shown as decrypted.
+      if (isEncryptedRow(client, message._id)) break;
       if (!client.messages.has(message._id)) {
         const instance = batch(() => {
           if (message.member) {
