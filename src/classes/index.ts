@@ -1,3 +1,4 @@
+export * from "./AuditLog.js";
 export * from "./BannedUser.js";
 export * from "./Bot.js";
 export * from "./CalendarEvent.js";

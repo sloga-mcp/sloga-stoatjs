@@ -109,6 +109,26 @@ export class ServerMember {
   }
 
   /**
+   * When this member's timeout expires, if they are timed out right now.
+   *
+   * Returns the `timeout` date only while it is still in the future, and
+   * `undefined` otherwise (no timeout, an expired one, or an invalid date).
+   *
+   * Not reactive to the passage of time: the comparison against the current
+   * time happens once per call. A caller that must react to the timeout
+   * expiring has to drive its own timer and call this again.
+   * @returns Expiry of the active timeout, or undefined
+   */
+  timedOutUntil(): Date | undefined {
+    const timeout = this.timeout;
+    if (timeout && timeout.getTime() > Date.now()) {
+      return timeout;
+    }
+
+    return undefined;
+  }
+
+  /**
    * Whether this member is server-muted (may not publish audio or video).
    */
   get serverMuted(): boolean {
@@ -246,11 +266,21 @@ export class ServerMember {
   /**
    * Edit a member
    * @param data Changes
+   * @param options Audit log options; a non-blank `reason` is sent as the
+   *   percent-encoded `X-Audit-Log-Reason` header
    */
-  async edit(data: DataMemberEdit): Promise<void> {
+  async edit(
+    data: DataMemberEdit,
+    options?: { reason?: string },
+  ): Promise<void> {
+    const reason = options?.reason?.trim();
+
     await this.#collection.client.api.patch(
       `/servers/${this.id.server as ""}/members/${this.id.user as ""}`,
       data,
+      reason
+        ? { headers: { "X-Audit-Log-Reason": encodeURIComponent(reason) } }
+        : undefined,
     );
   }
 
@@ -306,16 +336,38 @@ export class ServerMember {
 
   /**
    * Ban this member from the server
+   *
+   * Rejects when the server refuses the ban, or when the server is not
+   * cached.
    * @param options Ban options
    */
   async ban(options: DataBanCreate): Promise<void> {
-    this.server?.banUser(this, options);
+    await this.#requireServer().banUser(this, options);
   }
 
   /**
    * Kick this member from the server
+   *
+   * Rejects when the server refuses the kick, or when the server is not
+   * cached.
+   * @param options Audit log options; a non-blank `reason` is recorded with
+   *   the kick
    */
-  async kick(): Promise<void> {
-    this.server?.kickUser(this);
+  async kick(options?: { reason?: string }): Promise<void> {
+    await this.#requireServer().kickUser(this, options);
+  }
+
+  /**
+   * Server this member belongs to, or throw if it is not cached, so that a
+   * moderation call never resolves without having reached the API.
+   * @returns Server
+   */
+  #requireServer(): Server {
+    const server = this.server;
+    if (!server) {
+      throw new Error(`Server ${this.id.server} is not cached`);
+    }
+
+    return server;
   }
 }

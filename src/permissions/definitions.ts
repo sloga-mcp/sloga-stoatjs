@@ -43,8 +43,10 @@ export const Permission = {
   ChangeAvatar: 2n ** 12n,
   /// Remove other's avatars below their ranking
   RemoveAvatars: 2n ** 13n,
+  /// View the server's audit log
+  ViewAuditLog: 2n ** 14n,
 
-  // % 7 bits reserved
+  // % 5 bits reserved (15 to 19)
 
   // * Channel permissions
   /// View a channel
