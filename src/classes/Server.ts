@@ -27,6 +27,7 @@ import {
 } from "../permissions/calculator.js";
 import { Permission } from "../permissions/definitions.js";
 
+import type { AuditLogPage, AuditLogQuery } from "./AuditLog.js";
 import type { Channel } from "./Channel.js";
 import type { Emoji } from "./Emoji.js";
 import type { File } from "./File.js";
@@ -602,9 +603,25 @@ export class Server {
 
   /**
    * Kick user from this server
+   *
+   * A reason is recorded in the server's audit log. It travels in the
+   * `X-Audit-Log-Reason` header, percent-encoded because header values must
+   * be Latin-1 and `fetch` throws on anything else; the server decodes it,
+   * trims it and refuses more than 512 characters with
+   * `FailedValidation { error: "AuditLogReasonTooLong" }`. A missing or blank
+   * reason sends no header.
    * @param user User
+   * @param options Kick options
+   * @param options.reason Reason shown in the audit log
+   * @throws The server's error object when the kick is refused
    */
-  async kickUser(user: string | User | ServerMember): Promise<void> {
+  async kickUser(
+    user: string | User | ServerMember,
+    options?: { reason?: string },
+  ): Promise<void> {
+    const reason =
+      typeof options?.reason === "string" ? options.reason.trim() : "";
+
     return await this.#collection.client.api.delete(
       `/servers/${this.id as ""}/members/${
         typeof user === "string"
@@ -613,6 +630,10 @@ export class Server {
             ? user.id
             : user.id.user
       }`,
+      undefined,
+      reason
+        ? { headers: { "X-Audit-Log-Reason": encodeURIComponent(reason) } }
+        : undefined,
     );
   }
 
@@ -659,6 +680,45 @@ export class Server {
       (ban) =>
         new ServerBan(this.#collection.client, ban, userDict[ban._id.user]),
     );
+  }
+
+  /**
+   * Fetch one page of this server's audit log, newest first
+   *
+   * The end of the log is an EMPTY `entries` array; a short page is not the
+   * end. To page back, pass the `_id` of the last (oldest) entry as `before`.
+   * The page's users are cached in the client's user collection, and the
+   * page itself is returned as plain data.
+   * @param query Paging and filters; unset, null and empty keys are omitted
+   * @requires `ViewAuditLog`
+   * @returns One page of entries and the users they refer to
+   * @throws The server's error object when the request is refused
+   */
+  async fetchAuditLog(query: AuditLogQuery = {}): Promise<AuditLogPage> {
+    // Omit unset keys entirely. The server reads `?user=` as a filter on an
+    // actor id of "", which returns an empty page that looks like the end of
+    // the log, and `apiReq` only drops null/undefined, not "".
+    const params: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(query)) {
+      if (value === undefined || value === null || value === "") continue;
+      params[key] = value;
+    }
+
+    // stoat-api 0.13.5 has no audit log route in its generated tables, so its
+    // typed client would drop the query; use the raw request instead.
+    const page = (await this.#collection.client.channels.apiReq(
+      "GET",
+      `/servers/${this.id}/audit_log`,
+      { query: params },
+    )) as AuditLogPage;
+
+    batch(() => {
+      for (const user of page.users) {
+        this.#collection.client.users.getOrCreate(user._id, user);
+      }
+    });
+
+    return page;
   }
 
   /**
