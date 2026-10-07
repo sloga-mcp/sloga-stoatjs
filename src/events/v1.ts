@@ -635,6 +635,18 @@ type ReadyData = {
 };
 
 /**
+ * Whether a message event targets a row the E2EE layer authenticated. Its id
+ * is the server's envelope id, so the server can forge edits, deletes and
+ * reactions aimed at it; those must never touch a row shown under the lock.
+ * @param client Client
+ * @param id Message id
+ * @returns Whether the row is end-to-end encrypted
+ */
+function isEncryptedRow(client: Client, id: string): boolean {
+  return client.e2ee?.isEncryptedMessage(id) === true;
+}
+
+/**
  * Handle an event for the Client
  * @param client Client
  * @param event Event
@@ -807,6 +819,7 @@ export async function handleEvent(
       break;
     }
     case "MessageUpdate": {
+      if (isEncryptedRow(client, event.id)) break;
       const message = client.messages.getOrPartial(event.id);
       if (message) {
         const previousMessage = {
@@ -843,6 +856,7 @@ export async function handleEvent(
       break;
     }
     case "MessageAppend": {
+      if (isEncryptedRow(client, event.id)) break;
       const message = client.messages.getOrPartial(event.id);
       if (message) {
         const previousMessage = {
@@ -868,6 +882,8 @@ export async function handleEvent(
       break;
     }
     case "MessageDelete": {
+      if (isEncryptedRow(client, event.id)) break;
+
       // Emitted for every deletion, cached or not, so views that only hold
       // ids or counts (the forum list) can still react to it.
       client.emit("messageDeleteId", event.id, event.channel);
@@ -885,7 +901,7 @@ export async function handleEvent(
           "messageDeleteBulk",
           event.ids
             .map((id) => {
-              if (client.messages.has(id)) {
+              if (client.messages.has(id) && !isEncryptedRow(client, id)) {
                 const message = client.messages.getUnderlyingObject(id);
                 client.messages.delete(id);
                 return message!;
@@ -900,6 +916,7 @@ export async function handleEvent(
       break;
     }
     case "MessageReact": {
+      if (isEncryptedRow(client, event.id)) break;
       const message = client.messages.getOrPartial(event.id);
       if (message) {
         const reactions = message.reactions;
@@ -921,6 +938,7 @@ export async function handleEvent(
       break;
     }
     case "MessageUnreact": {
+      if (isEncryptedRow(client, event.id)) break;
       const message = client.messages.getOrPartial(event.id);
       if (message) {
         const set = message.reactions.get(event.emoji_id);
@@ -947,6 +965,7 @@ export async function handleEvent(
       break;
     }
     case "MessageRemoveReaction": {
+      if (isEncryptedRow(client, event.id)) break;
       const message = client.messages.getOrPartial(event.id);
       if (message) {
         const reactions = message.reactions;
