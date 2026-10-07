@@ -333,6 +333,25 @@ export class Message {
   }
 
   /**
+   * Whether this is an end-to-end encrypted message: a local row the native
+   * layer decrypted and injected, with no server-side existence (the E2EE
+   * adapter's id set is the only trusted source, never a message flag)
+   */
+  get #isEncrypted(): boolean {
+    return this.#collection.client.e2ee?.isEncryptedMessage(this.id) === true;
+  }
+
+  /**
+   * Refuse a server action on an encrypted message: the server has no such
+   * message (404), and an edit or reaction would reach it in plaintext.
+   * Call only at the top of `async` methods, so the throw surfaces as a
+   * rejected Promise before any request is made.
+   */
+  #assertNotEncrypted(): void {
+    if (this.#isEncrypted) throw new Error("EncryptedMessageServerAction");
+  }
+
+  /**
    * Immutable poll definition when this message carries a poll
    * (server-stamped by the poll create route — unforgeable, the regular
    * send path has no poll field and rejects the Poll flag bit)
@@ -385,6 +404,7 @@ export class Message {
    * closed) — hidden-until-vote is enforced server-side.
    */
   async fetchPoll(): Promise<PollState | undefined> {
+    this.#assertNotEncrypted();
     const poll = this.poll;
     if (!poll) return undefined;
 
@@ -402,6 +422,7 @@ export class Message {
    * @param answerIds Selected answer ids (exactly one unless multi-select)
    */
   async votePoll(answerIds: number[]): Promise<void> {
+    this.#assertNotEncrypted();
     const poll = this.poll;
     if (!poll) return;
 
@@ -418,6 +439,7 @@ export class Message {
    * Retract this user's ballot from the poll.
    */
   async removePollVote(): Promise<void> {
+    this.#assertNotEncrypted();
     const poll = this.poll;
     if (!poll) return;
 
@@ -437,6 +459,7 @@ export class Message {
    * only.
    */
   async endPoll(): Promise<void> {
+    this.#assertNotEncrypted();
     const poll = this.poll;
     if (!poll) return;
 
@@ -456,6 +479,7 @@ export class Message {
     answerId: number,
     options?: { after?: string; limit?: number },
   ): Promise<User[]> {
+    this.#assertNotEncrypted();
     const poll = this.poll;
     if (!poll) return [];
 
@@ -539,6 +563,7 @@ export class Message {
    * always arrives.
    */
   async fetchSoftRes(): Promise<SoftResState | undefined> {
+    this.#assertNotEncrypted();
     const softres = this.softres;
     if (!softres) return undefined;
 
@@ -558,6 +583,7 @@ export class Message {
    * should surface the error and refetch.
    */
   async reserveSoftRes(data: DataSoftResReserve): Promise<void> {
+    this.#assertNotEncrypted();
     const softres = this.softres;
     if (!softres) return;
 
@@ -574,6 +600,7 @@ export class Message {
    * Retract this user's reservation row from the sheet.
    */
   async retractSoftRes(): Promise<void> {
+    this.#assertNotEncrypted();
     const softres = this.softres;
     if (!softres) return;
 
@@ -595,6 +622,7 @@ export class Message {
    * the fresh copy on `definition`.
    */
   async editSoftRes(data: DataSoftResEdit): Promise<void> {
+    this.#assertNotEncrypted();
     const softres = this.softres;
     if (!softres) return;
 
@@ -614,6 +642,7 @@ export class Message {
    * `lock_at_event_start: true`).
    */
   async lockSoftRes(locked: boolean): Promise<void> {
+    this.#assertNotEncrypted();
     const softres = this.softres;
     if (!softres) return;
 
@@ -633,6 +662,7 @@ export class Message {
   async exportSoftRes(
     format: SoftResExportFormat,
   ): Promise<SoftResExportResponseData | undefined> {
+    this.#assertNotEncrypted();
     const softres = this.softres;
     if (!softres) return undefined;
 
@@ -692,6 +722,7 @@ export class Message {
    * messages). The `Crossposted` flag flips via the resulting MessageUpdate.
    */
   async publish(): Promise<void> {
+    this.#assertNotEncrypted();
     await this.channel?.crosspostMessage(this.id);
   }
 
@@ -706,6 +737,7 @@ export class Message {
     destination: string | Channel,
     idempotencyKey: string = ulid(),
   ): Promise<Message> {
+    this.#assertNotEncrypted();
     const destinationId =
       typeof destination === "string" ? destination : destination.id;
 
@@ -799,6 +831,7 @@ export class Message {
    * @param data Message edit route data
    */
   async edit(data: DataEditMessage): Promise<APIMessage> {
+    this.#assertNotEncrypted();
     return await this.#collection.client.api.patch(
       `/channels/${this.channelId as ""}/messages/${this.id as ""}`,
       data,
@@ -809,6 +842,7 @@ export class Message {
    * Delete a message
    */
   async delete(): Promise<void> {
+    this.#assertNotEncrypted();
     return await this.#collection.client.api.delete(
       `/channels/${this.channelId as ""}/messages/${this.id as ""}`,
     );
@@ -831,6 +865,10 @@ export class Message {
     // ephemeral id is minted at respond time, so it sorts after every
     // persisted message in the channel).
     if (this.isEphemeral) return;
+    // Encrypted messages are local rows the server has never seen; acking
+    // one would store a foreign id as the read pointer and broadcast it to
+    // every other session.
+    if (this.#isEncrypted) return;
     this.channel?.ack(this, skipRateLimiter, skipRequest, skipNextMarking);
   }
 
@@ -856,6 +894,7 @@ export class Message {
    * Clear all reactions from this message
    */
   async clearReactions(): Promise<void> {
+    this.#assertNotEncrypted();
     return await this.#collection.client.api.delete(
       `/channels/${this.channelId as ""}/messages/${this.id as ""}/reactions`,
     );
@@ -866,6 +905,7 @@ export class Message {
    * @param emoji Unicode or emoji ID
    */
   async react(emoji: string): Promise<void> {
+    this.#assertNotEncrypted();
     return await this.#collection.client.api.put(
       `/channels/${this.channelId as ""}/messages/${this.id as ""}/reactions/${
         emoji as ""
@@ -879,6 +919,7 @@ export class Message {
    * @param deleteAll Remove all reactions
    */
   async unreact(emoji: string, deleteAll = false): Promise<void> {
+    this.#assertNotEncrypted();
     return await this.#collection.client.api.delete(
       `/channels/${this.channelId as ""}/messages/${this.id as ""}/reactions/${
         emoji as ""
@@ -890,8 +931,9 @@ export class Message {
   /**
    * Pin the message
    */
-  pin(): Promise<void> {
-    return this.#collection.client.api.post(
+  async pin(): Promise<void> {
+    this.#assertNotEncrypted();
+    return await this.#collection.client.api.post(
       `/channels/${this.channelId as ""}/messages/${this.id as ""}/pin`,
     );
   }
@@ -899,8 +941,9 @@ export class Message {
   /**
    * Unpin the message
    */
-  unpin(): Promise<void> {
-    return this.#collection.client.api.delete(
+  async unpin(): Promise<void> {
+    this.#assertNotEncrypted();
+    return await this.#collection.client.api.delete(
       `/channels/${this.channelId as ""}/messages/${this.id as ""}/pin`,
     );
   }
