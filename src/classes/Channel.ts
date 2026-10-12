@@ -17,7 +17,12 @@ import type { APIRoutes } from "stoat-api";
 import { decodeTime, ulid } from "ulid";
 
 import { ChannelCollection } from "../collections/index.js";
+import { UNREAD_COUNT_CAP } from "../hydration/channelUnread.js";
 import { hydrate } from "../hydration/index.js";
+import {
+  encryptedAckId,
+  isPlausibleMessageUlid,
+} from "../lib/encryptedMessage.js";
 import {
   bitwiseAndEq,
   calculatePermission,
@@ -71,6 +76,17 @@ export type VoiceTokenResponse = {
   /** Url of the LiveKit server to connect to */
   url: string;
 };
+
+/**
+ * Where an end-to-end encrypted message handed to
+ * {@link Channel.noteEncryptedMessage} came from.
+ *
+ * - `incoming`: another user's message, just decrypted
+ * - `own`: this account's message, sent from this device or decrypted from
+ *   another of its devices
+ * - `restored`: a row read back from the device's local history
+ */
+export type EncryptedMessageOrigin = "incoming" | "own" | "restored";
 
 /**
  * Channel Class
@@ -1553,10 +1569,19 @@ export class Channel {
       this.#manuallyMarked = true;
     }
 
-    const lastMessageId =
+    const resolvedId =
       (typeof message === "string" ? message : message?.id) ??
       this.lastMessageId ??
       ulid();
+
+    // An encrypted message is acked by its padded id, both here and on the
+    // server. Every recipient device holds its own copy of one send under
+    // its own envelope id; the padded id sorts at or after all of them, so
+    // reading the message on one device clears it on the others.
+    const lastMessageId =
+      this.#collection.client.e2ee?.isEncryptedMessage(resolvedId) === true
+        ? encryptedAckId(resolvedId)
+        : resolvedId;
 
     const channelUnread = this.#collection.client.channelUnreads.for(this);
 
@@ -1658,6 +1683,132 @@ export class Channel {
     }
 
     this.#manuallyMarked = false;
+  }
+
+  /**
+   * For internal use only: records an end-to-end encrypted message the E2EE
+   * layer decrypted, sent or read back from its local store.
+   *
+   * The server never sees an encrypted message as a message, so it never
+   * moves this channel's last message or unread state for one. This is the
+   * only place those move for encrypted traffic. The id is an envelope id
+   * the server chose, so one that is not a plausible ULID is dropped before
+   * it can break the conversation sort or pin the channel to the top.
+   *
+   * Every origin moves the last message forward. Then:
+   * - `incoming` counts toward the badge when the message sits past the read
+   *   pointer, whether or not it moved the last message (a seed from local
+   *   history may have got there first). With `reopen`, a closed DM is shown
+   *   again, locally and for this session only.
+   * - `own` marks the channel read locally, up to the message or to the
+   *   padded receipt id if that is later. With `serverAck` and a plausible
+   *   receipt id, the padded receipt id is also sent to the server right
+   *   away; the server saw the send at that instant, so this tells it
+   *   nothing new. Without one, no server ack is sent: the message id may
+   *   come from this device's clock, and must never become the server's
+   *   pointer.
+   * - `restored` only orders the channel.
+   *
+   * The last message and the read pointer only move forward, so a late or
+   * repeated call leaves them alone. The `incoming` count does not: every
+   * call past the read pointer adds one, so call it once per decrypted
+   * message.
+   * @param messageId Id of the encrypted message
+   * @param origin Where the message came from
+   * @param options Attachments flag, DM reopen, receipt id and server ack
+   * @returns Whether the channel's last message moved
+   */
+  noteEncryptedMessage(
+    messageId: string,
+    origin: EncryptedMessageOrigin,
+    options?: {
+      hasAttachments?: boolean;
+      reopen?: boolean;
+      receiptId?: string;
+      serverAck?: boolean;
+    },
+  ): boolean {
+    if (!isPlausibleMessageUlid(messageId)) return false;
+
+    const client = this.#collection.client;
+    const receiptId =
+      options?.receiptId && isPlausibleMessageUlid(options.receiptId)
+        ? options.receiptId
+        : undefined;
+
+    let moved = false;
+
+    batch(() => {
+      if ((this.lastMessageId ?? "0").localeCompare(messageId) === -1) {
+        this.#collection.updateUnderlyingObject(
+          this.id,
+          "lastMessageId",
+          messageId,
+        );
+        moved = true;
+      }
+
+      if (origin === "incoming") {
+        if (client.options.syncUnreads) {
+          const unread = client.channelUnreads.for(this);
+
+          // Only the read pointer decides, never whether the last message
+          // moved above.
+          if ((unread.lastMessageId ?? "0").localeCompare(messageId) === -1) {
+            client.channelUnreads.updateUnderlyingObject(
+              this.id,
+              "unreadCount",
+              Math.min(unread.unreadCount + 1, UNREAD_COUNT_CAP),
+            );
+
+            if (options?.hasAttachments && !unread.unreadHasAttachments) {
+              client.channelUnreads.updateUnderlyingObject(
+                this.id,
+                "unreadHasAttachments",
+                true,
+              );
+            }
+          }
+        }
+
+        if (options?.reopen && this.type === "DirectMessage" && !this.active) {
+          this.#collection.updateUnderlyingObject(this.id, "active", true);
+        }
+      } else if (origin === "own" && client.options.syncUnreads) {
+        const padded = receiptId ? encryptedAckId(receiptId) : undefined;
+        client.channelUnreads.acknowledge(
+          this.id,
+          padded && padded.localeCompare(messageId) === 1 ? padded : messageId,
+        );
+      }
+    });
+
+    if (origin === "own" && options?.serverAck && receiptId) {
+      const ackId = encryptedAckId(receiptId);
+
+      // A debounced ack at or before this one is covered by it, and firing
+      // later it would move the server's pointer back.
+      if (this.#ackPending && this.#ackPending.localeCompare(ackId) !== 1) {
+        clearTimeout(this.#ackTimeout);
+        this.#ackTimeout = undefined;
+        this.#ackLimit = undefined;
+        this.#ackPending = undefined;
+      }
+
+      // The server stores whatever it is sent, so an ack older than one
+      // already requested would move its pointer back.
+      if ((this.#ackRequested ?? "0").localeCompare(ackId) === -1) {
+        this.#sendAck(ackId);
+      }
+    }
+
+    // Sending reads the channel, so an earlier "mark as unread" no longer
+    // holds; left set, it would swallow the next ack while viewing.
+    if (origin === "own") {
+      this.#manuallyMarked = false;
+    }
+
+    return moved;
   }
 
   /**

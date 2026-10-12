@@ -865,9 +865,10 @@ export class Message {
     // ephemeral id is minted at respond time, so it sorts after every
     // persisted message in the channel).
     if (this.isEphemeral) return;
-    // Encrypted messages are local rows the server has never seen; acking
-    // one would store a foreign id as the read pointer and broadcast it to
-    // every other session.
+    // Encrypted messages are local rows the server has never seen, so a
+    // message-level ack (such as "Mark as unread") stays a no-op. Read state
+    // for an encrypted conversation goes through Channel.ack, which sends the
+    // padded encryptedAckId so one ack covers every device's copy of the send.
     if (this.#isEncrypted) return;
     this.channel?.ack(this, skipRateLimiter, skipRequest, skipNextMarking);
   }
