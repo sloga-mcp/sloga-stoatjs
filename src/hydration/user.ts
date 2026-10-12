@@ -164,7 +164,8 @@ export enum UserBadges {
   EarlyAdopter = 256,
   ReservedRelevantJokeBadge1 = 512,
   ReservedRelevantJokeBadge2 = 1024,
-  // 2048 is reserved
+  /** Streamer in Sloga's Founding Streamer program */
+  FoundingStreamer = 2048,
   /** Joined through a friend's referral */
   Welcomed = 4096,
   /** Referred friends to Sloga */
