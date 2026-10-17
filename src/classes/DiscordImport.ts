@@ -9,6 +9,15 @@
  * Jobs are owner-scoped: reads 404 for anyone but the initiating user.
  */
 
+/**
+ * A non-Discord platform a server can be imported from, as it appears in the
+ * `/import/{source}/...` route path. Not every source is live on every
+ * instance: an unready one answers 404 (challenge) or
+ * `ImportSourceUnavailable` (server import). Check the instance's
+ * `features.import_sources` before offering one.
+ */
+export type ImportSource = "stoat" | "fluxer" | "matrix";
+
 /** Lifecycle state of an import job. `Completed`/`Failed` are terminal. */
 export type DiscordImportStatus = "Queued" | "Running" | "Completed" | "Failed";
 

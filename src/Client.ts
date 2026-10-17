@@ -15,7 +15,10 @@ import type {
 import type { CalendarEvent, EventRsvpData } from "./classes/CalendarEvent.js";
 import type { Channel } from "./classes/Channel.js";
 import type { ChannelFollowData } from "./classes/ChannelFollow.js";
-import type { DiscordImportJobData } from "./classes/DiscordImport.js";
+import type {
+  DiscordImportJobData,
+  ImportSource,
+} from "./classes/DiscordImport.js";
 import type { E2EEAdapter } from "./classes/E2EE.js";
 import type { Emoji } from "./classes/Emoji.js";
 import type { InteractionCreateEvent } from "./classes/Interaction.js";
@@ -1218,6 +1221,43 @@ export class Client extends AsyncEventEmitter<Events> {
       "GET",
       "/import/discord/active",
     )) as DiscordImportJobData | null;
+  }
+
+  /**
+   * Fetch today's verification code for importing from another platform,
+   * which lets the importer confirm the user controls the source server.
+   *
+   * Rejects with the parsed API error body — a 404 when the source is
+   * unknown or not live on this instance.
+   * @param source Platform to import from
+   * @returns Today's code
+   */
+  async fetchImportChallenge(source: ImportSource): Promise<{ code: string }> {
+    return (await this.#apiReq("GET", `/import/${source}/challenge`)) as {
+      code: string;
+    };
+  }
+
+  /**
+   * Start a server import from another platform. Same response as
+   * {@link importDiscordTemplate}: follow the job with
+   * {@link fetchDiscordImportJob} and the `discordImport*` events.
+   *
+   * Rejects with the parsed API error body — notably
+   * `ImportAlreadyInProgress`, `TooManyServers`, `ImportSourceNotFound`,
+   * `ImportVerificationMissing`, `ImportBotNotInServer`,
+   * `ImportUpstreamUnavailable` and `ImportSourceUnavailable`.
+   * @param source Platform to import from
+   * @param sourceString Pasted link or id of the source server
+   * @returns The new job's id
+   */
+  async importServer(
+    source: ImportSource,
+    sourceString: string,
+  ): Promise<{ job_id: string }> {
+    return (await this.#apiReq("POST", `/import/${source}/server`, {
+      source: sourceString,
+    })) as { job_id: string };
   }
 
   /**
