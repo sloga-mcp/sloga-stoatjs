@@ -7,7 +7,12 @@ import type { UserCollection } from "../collections/UserCollection.js";
 import { hydrate } from "../hydration/index.js";
 import type { UserConnection } from "../hydration/user.js";
 import { U32_MAX, UserPermission } from "../permissions/definitions.js";
-import type { DataEditUserExt, NameStyle, UserPerks } from "../types/perks.js";
+import type {
+  DataEditUserExt,
+  NameStyle,
+  UserCipher,
+  UserPerks,
+} from "../types/perks.js";
 
 import type { Channel } from "./Channel.js";
 import type { File } from "./File.js";
@@ -102,6 +107,13 @@ export class User {
    */
   get nameStyle(): NameStyle | undefined {
     return this.#collection.getUnderlyingObject(this.id).nameStyle;
+  }
+
+  /**
+   * Cipher membership, if the user has one
+   */
+  get cipher(): UserCipher | undefined {
+    return this.#collection.getUnderlyingObject(this.id).cipher;
   }
 
   /**

@@ -1408,6 +1408,9 @@ export async function handleEvent(
               case "CustomBadge":
                 changes["customBadge"] = undefined;
                 break;
+              case "Cipher":
+                changes["cipher"] = undefined;
+                break;
             }
           }
         }

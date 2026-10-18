@@ -8,7 +8,7 @@ import type {
 
 import type { Client } from "../Client.js";
 import { File } from "../classes/File.js";
-import type { NameStyle } from "../types/perks.js";
+import type { NameStyle, UserCipher } from "../types/perks.js";
 
 import type { Hydrate } from "./index.js";
 
@@ -38,8 +38,8 @@ export type UserConnection = {
  * `name_style` (already filtered by the server to what the user's perks
  * allow), `perks` (bitfield, skipped when 0; normally only sent for the
  * session user, though editing another account as staff or as its bot owner
- * returns that account's value) and `custom_badge` are likewise newer than
- * the published types.
+ * returns that account's value), `custom_badge` and `cipher` (public Cipher
+ * membership, absent = none) are likewise newer than the published types.
  */
 type APIUserExt = APIUser & {
   e2ee_enabled?: boolean;
@@ -51,6 +51,7 @@ type APIUserExt = APIUser & {
   name_style?: NameStyle;
   perks?: number;
   custom_badge?: { image: APIFile; label: string };
+  cipher?: UserCipher;
 };
 
 /** Who may fetch the user's profile page */
@@ -84,6 +85,7 @@ export type HydratedUser = {
   nameStyle?: NameStyle;
   perks: number;
   customBadge?: { image: File; label: string };
+  cipher?: UserCipher;
 };
 
 export const userHydration: Hydrate<APIUserExt, HydratedUser> = {
@@ -137,6 +139,9 @@ export const userHydration: Hydrate<APIUserExt, HydratedUser> = {
         image: new File(ctx as Client, user.custom_badge.image),
         label: user.custom_badge.label,
       },
+    // Only runs when the key is present, so a partial update without it
+    // keeps the known value; a lost membership arrives as clear "Cipher"
+    cipher: (user) => user.cipher,
   },
   initialHydration: () => ({
     relationship: "None",
