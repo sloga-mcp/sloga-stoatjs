@@ -23,6 +23,22 @@ export type NameStyle = {
 };
 
 /**
+ * Cipher membership tier
+ */
+export type CipherTier = "T99" | "T149" | "T299";
+
+/**
+ * Public Cipher membership shown on a user; absent = not a member.
+ * Set by the server only, never through a user edit
+ */
+export type UserCipher = {
+  /** Membership number */
+  number: number;
+  /** Membership tier */
+  tier: CipherTier;
+};
+
+/**
  * Body of PATCH /users/:id, including fields newer than the published API types
  */
 export type DataEditUserExt = Omit<DataEditUser, "remove"> & {
