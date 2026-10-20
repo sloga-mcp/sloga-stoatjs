@@ -9,6 +9,16 @@ import { File } from "./File.js";
 import type { Server } from "./Server.js";
 
 /**
+ * Server invite fields that are newer than the published stoat-api types.
+ * The API sends both only for publicly discoverable servers, and the online
+ * count only below a member limit, so either can be absent.
+ */
+type ServerInviteExtras = {
+  server_description?: string;
+  online_count?: number;
+};
+
+/**
  * Public Channel Invite
  */
 export abstract class PublicChannelInvite {
@@ -60,6 +70,8 @@ export class ServerPublicInvite extends PublicChannelInvite {
   readonly serverBanner?: File;
   readonly serverFlags: ServerFlags;
   readonly memberCount: number;
+  readonly serverDescription?: string;
+  readonly onlineCount?: number;
 
   readonly channelId: string;
   readonly channelName: string;
@@ -70,7 +82,10 @@ export class ServerPublicInvite extends PublicChannelInvite {
    * @param client Client
    * @param invite Invite
    */
-  constructor(client: Client, invite: InviteResponse & { type: "Server" }) {
+  constructor(
+    client: Client,
+    invite: InviteResponse & { type: "Server" } & ServerInviteExtras,
+  ) {
     super(client, "Server");
 
     this.code = invite.code;
@@ -89,6 +104,8 @@ export class ServerPublicInvite extends PublicChannelInvite {
       : undefined;
     this.serverFlags = invite.server_flags ?? 0;
     this.memberCount = invite.member_count;
+    this.serverDescription = invite.server_description;
+    this.onlineCount = invite.online_count;
 
     this.channelId = invite.channel_id;
     this.channelName = invite.channel_name;
