@@ -126,6 +126,34 @@ export class EventCollection extends ClassCollection<
   }
 
   /**
+   * Upcoming events across every server the user is in (GET /events/@me/upcoming).
+   * Resolves `undefined` when the server predates this route; throws as other calls do otherwise.
+   */
+  async listUpcoming(
+    from: number,
+    to: number,
+    limit?: number,
+  ): Promise<EventOccurrences[] | undefined> {
+    const response = await this.#send("GET", "/events/@me/upcoming", {
+      query: { from, to, limit },
+    });
+
+    if (!response.ok) {
+      const error = await readErrorBody(response);
+      // A server without this route answers with the framework's default 404,
+      // whose body is not a typed error. A typed 404 is a real answer.
+      if (response.status === 404 && !isTypedError(error)) return undefined;
+      throw error;
+    }
+
+    const rows = (await response.json()) as EventWithOccurrences[];
+    return rows.map((row) => ({
+      event: this.upsert(row.event),
+      occurrences: row.occurrences,
+    }));
+  }
+
+  /**
    * Import legacy `[ACUTEST_EVENT]:`-tagged messages from a channel into real
    * events (manager-triggered, slice F). Dedup by source message id makes
    * re-running safe.
@@ -155,6 +183,27 @@ export class EventCollection extends ClassCollection<
       query?: Record<string, unknown> | undefined;
     },
   ): Promise<unknown> {
+    const response = await this.#send(method, path, options);
+
+    if (!response.ok) {
+      throw await readErrorBody(response);
+    }
+
+    return response.status === 204 ? null : response.json();
+  }
+
+  /**
+   * Perform a raw `/events` request and hand back the `Response` unread, so a
+   * caller can look at the HTTP status before deciding how to treat the body.
+   */
+  async #send(
+    method: string,
+    path: string,
+    options?: {
+      body?: unknown;
+      query?: Record<string, unknown> | undefined;
+    },
+  ): Promise<Response> {
     const api = this.client.api as unknown as {
       baseURL: string;
       auth: Record<string, string>;
@@ -169,7 +218,7 @@ export class EventCollection extends ClassCollection<
       if (pairs.length) qs = "?" + new URLSearchParams(pairs).toString();
     }
 
-    const response = await fetch(api.baseURL + path + qs, {
+    return fetch(api.baseURL + path + qs, {
       method,
       headers: {
         ...api.auth,
@@ -177,19 +226,32 @@ export class EventCollection extends ClassCollection<
       },
       body: options?.body ? JSON.stringify(options.body) : undefined,
     });
-
-    if (!response.ok) {
-      const text = await response.text();
-      // Surface the typed error object when the body is JSON, else the raw text.
-      let error: unknown = text;
-      try {
-        error = JSON.parse(text);
-      } catch {
-        /* keep the raw text */
-      }
-      throw error;
-    }
-
-    return response.status === 204 ? null : response.json();
   }
+}
+
+/**
+ * Read a failed response's body: the typed error object when the body is
+ * JSON, else the raw text.
+ */
+async function readErrorBody(response: Response): Promise<unknown> {
+  const text = await response.text();
+  let error: unknown = text;
+  try {
+    error = JSON.parse(text);
+  } catch {
+    /* keep the raw text */
+  }
+  return error;
+}
+
+/**
+ * Whether a parsed error body is a typed API error (a JSON object carrying a
+ * string `type`).
+ */
+function isTypedError(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    typeof (error as { type?: unknown }).type === "string"
+  );
 }
