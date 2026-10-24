@@ -24,6 +24,10 @@ import {
   isPlausibleMessageUlid,
 } from "../lib/encryptedMessage.js";
 import {
+  ProtectedChannelUnavailable,
+  assertProtectedSendable,
+} from "../lib/protected.js";
+import {
   bitwiseAndEq,
   calculatePermission,
 } from "../permissions/calculator.js";
@@ -787,6 +791,22 @@ export class Channel {
       msg.flags |= 1;
     }
 
+    // Protected-channel choke point (plan 4.1): every send to a protected
+    // or pinned text channel goes to the adapter, which encrypts or THROWS.
+    // There is no plaintext fallthrough and no Idempotency-Key here; the
+    // adapter owns retries with the key. Refused fields throw before the
+    // adapter is reached, and none is ever stripped. A pinned channel whose
+    // object is not hydrated (no type yet) takes this arm too: fail closed.
+    if (
+      (this.type === "TextChannel" || this.type === undefined) &&
+      this.#collection.client.isProtectedChannel(this.id)
+    ) {
+      assertProtectedSendable(msg);
+      const e2ee = this.#collection.client.e2ee;
+      if (!e2ee?.handleProtectedSend) throw new ProtectedChannelUnavailable();
+      return e2ee.handleProtectedSend(this, msg, idempotencyKey);
+    }
+
     // E2EE choke point — every DM send passes through here BEFORE the
     // plaintext path. The native layer decides the conversation's mode
     // from local truth; a non-null result means the message went out
@@ -841,6 +861,17 @@ export class Channel {
   }
 
   /**
+   * Refuse a server-mediated plaintext route (poll, soft-reserve sheet,
+   * scheduled message) in a protected or pinned channel. Call first in an
+   * `async` method so the throw is a rejection before any request.
+   */
+  #assertNotProtected(): void {
+    if (this.#collection.client.isProtectedChannel(this.id)) {
+      throw new ProtectedChannelUnavailable();
+    }
+  }
+
+  /**
    * Create a poll in this channel. The server assembles the message
    * (Poll flag + embedded definition) and counts votes authoritatively.
    * @param data Poll creation data
@@ -852,6 +883,7 @@ export class Channel {
     data: DataPollCreate,
     idempotencyKey: string = ulid(),
   ): Promise<Message> {
+    this.#assertNotProtected();
     const message = (await this.#collection.apiReq(
       "POST",
       `/channels/${this.id}/polls`,
@@ -882,6 +914,7 @@ export class Channel {
     data: DataSoftResCreate,
     idempotencyKey: string = ulid(),
   ): Promise<Message> {
+    this.#assertNotProtected();
     const message = (await this.#collection.apiReq(
       "POST",
       `/channels/${this.id}/softres`,
@@ -914,6 +947,7 @@ export class Channel {
     scheduledAt: number,
     idempotencyKey: string = ulid(),
   ): Promise<ScheduledMessageData> {
+    this.#assertNotProtected();
     const row = (await this.#collection.apiReq(
       "POST",
       `/channels/${this.id}/scheduled_messages`,
@@ -978,7 +1012,35 @@ export class Channel {
       `/channels/${this.id as ""}/messages/${messageId as ""}`,
     );
 
-    return this.#collection.client.messages.getOrCreate(message._id, message);
+    const row = this.#collection.client.messages.getOrCreate(
+      message._id,
+      message,
+    );
+    this.#decryptProtected([row]);
+    return row;
+  }
+
+  /**
+   * Hand fetched protected rows to the E2EE adapter to decrypt (fire and
+   * forget; the rows are already stored without server text). Every row
+   * of a protected or pinned channel goes, and elsewhere any row that
+   * carries `encrypted`.
+   * @param rows Fetched messages
+   */
+  #decryptProtected(rows: Message[]): void {
+    const client = this.#collection.client;
+    const batchRows = client.isProtectedChannel(this.id)
+      ? rows
+      : rows.filter((row) => row.encrypted !== undefined);
+    if (!batchRows.length) return;
+
+    try {
+      client.e2ee?.decryptProtectedHistory?.(this, batchRows);
+    } catch {
+      console.error("[protected] decryptProtectedHistory failed", {
+        channelId: this.id,
+      });
+    }
   }
 
   /**
@@ -1012,9 +1074,11 @@ export class Channel {
       { ...params },
     )) as APIMessage[];
 
-    return messages.map((message) =>
+    const rows = messages.map((message) =>
       this.#collection.client.messages.getOrCreate(message._id, message),
     );
+    this.#decryptProtected(rows);
+    return rows;
   }
 
   /**
@@ -1053,7 +1117,7 @@ export class Channel {
       { ...params, include_users: true },
     )) as { messages: APIMessage[]; users: APIUser[]; members?: APIMember[] };
 
-    return batch(() => ({
+    const result = batch(() => ({
       messages: data.messages.map((message) =>
         this.#collection.client.messages.getOrCreate(message._id, message),
       ),
@@ -1064,6 +1128,8 @@ export class Channel {
         this.#collection.client.serverMembers.getOrCreate(member._id, member),
       ),
     }));
+    this.#decryptProtected(result.messages);
+    return result;
   }
 
   /**
@@ -1080,11 +1146,13 @@ export class Channel {
       params,
     )) as APIMessage[];
 
-    return batch(() =>
+    const rows = batch(() =>
       messages.map((message) =>
         this.#collection.client.messages.getOrCreate(message._id, message),
       ),
     );
+    this.#decryptProtected(rows);
+    return rows;
   }
 
   /**
@@ -1108,7 +1176,7 @@ export class Channel {
       },
     )) as { messages: APIMessage[]; users: APIUser[]; members?: APIMember[] };
 
-    return batch(() => ({
+    const result = batch(() => ({
       messages: data.messages.map((message) =>
         this.#collection.client.messages.getOrCreate(message._id, message),
       ),
@@ -1119,6 +1187,8 @@ export class Channel {
         this.#collection.client.serverMembers.getOrCreate(member._id, member),
       ),
     }));
+    this.#decryptProtected(result.messages);
+    return result;
   }
 
   /**
@@ -1832,6 +1902,15 @@ export class Channel {
    */
   get slowmode(): number {
     return this.#collection.getUnderlyingObject(this.id).slowmode ?? 0;
+  }
+
+  /**
+   * Whether the server reports this channel as a Protected channel (one-way
+   * once seen). Use `client.isProtectedChannel(id)` for decisions: it also
+   * honours this device's pins.
+   */
+  get isProtected(): boolean {
+    return this.#collection.getUnderlyingObject(this.id).protected === true;
   }
 
   /**

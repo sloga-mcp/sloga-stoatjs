@@ -2,6 +2,7 @@ import type { Accessor, Setter } from "solid-js";
 import { batch, createSignal } from "solid-js";
 
 import { ReactiveMap } from "@solid-primitives/map";
+import { ReactiveSet } from "@solid-primitives/set";
 import { AsyncEventEmitter } from "@vladfrangu/async_event_emitter";
 import { API } from "stoat-api";
 import type {
@@ -56,6 +57,7 @@ import type { HydratedMessage } from "./hydration/message.js";
 import type { HydratedServer } from "./hydration/server.js";
 import type { HydratedServerMember } from "./hydration/serverMember.js";
 import type { HydratedUser } from "./hydration/user.js";
+import { ProtectedPinSet } from "./lib/protectedPins.js";
 import {
   RE_CHANNELS,
   RE_CUSTOM_EMOJI,
@@ -631,6 +633,19 @@ export class Client extends AsyncEventEmitter<Events> {
    */
   e2ee: E2EEAdapter | undefined;
 
+  /**
+   * Channel ids this device has seen protected (one-way, persisted per user
+   * by the SDK itself; loaded at the top of Ready). See
+   * {@link Client.isProtectedChannel}.
+   */
+  readonly protectedPins = new ProtectedPinSet();
+
+  /**
+   * Channels whose server object most recently STRIPPED `protected` this
+   * session (see {@link Client.isProtectedFlagStripped}). In memory only.
+   */
+  readonly #protectedFlagStripped = new ReactiveSet<string>();
+
   readonly ready: Accessor<boolean>;
   #setReady: Setter<boolean>;
 
@@ -763,6 +778,92 @@ export class Client extends AsyncEventEmitter<Events> {
     if (typeof window !== "undefined") {
       const ref = new WeakRef(this);
       window.addEventListener("pagehide", () => ref.deref()?.flushAcks());
+    }
+  }
+
+  /**
+   * Whether a channel is a Protected channel on this client: the server
+   * reported it protected, or this device pinned it protected earlier (so
+   * it holds for channels not loaded yet and survives a server that lowers
+   * the flag). Gates the protected send arm, the stripping of server text
+   * from rows, and the pin-only handling of message updates. Independent of
+   * `e2ee`: with no adapter a protected send throws.
+   * @param channelId Channel id
+   */
+  isProtectedChannel(channelId: string): boolean {
+    return (
+      this.channels.getUnderlyingObject(channelId).protected === true ||
+      this.protectedPins.has(channelId)
+    );
+  }
+
+  /**
+   * Whether the server has stripped `protected` from this channel in this
+   * session: its last full object lacked `protected: true`, or a partial
+   * carried an explicit `protected: false`, while this client holds it
+   * protected. Cleared when a later object carries `true`; a partial
+   * without the field (a rename) leaves it unchanged. Reactive (Solid);
+   * not persisted, so a reload starts clear until the next Ready.
+   * @param channelId Channel id
+   */
+  isProtectedFlagStripped(channelId: string): boolean {
+    return this.#protectedFlagStripped.has(channelId);
+  }
+
+  /**
+   * Apply a channel object's `protected` field one-way (plan D1). `true`
+   * marks the cached channel protected, pins it and notifies the adapter.
+   * A stripped flag (an explicit `false` in a partial, or a full object
+   * without `true`) on a channel this client holds protected notifies the
+   * adapter and changes nothing locally. An absent field in a partial
+   * changes nothing. The caller must keep an explicit `false` out of the
+   * changes it applies itself.
+   *
+   * Used by Ready, ChannelCreate and ChannelUpdate; call it with
+   * `full = true` after a raw `GET /channels/:id` (plan D8).
+   * @param channelId Channel id
+   * @param value The object's `protected` value (absent = `undefined`)
+   * @param full Whether the object is a full channel rather than a partial
+   */
+  applyProtectedFlag(channelId: string, value: unknown, full: boolean): void {
+    if (value === true) {
+      // Only server text channels can be protected; a flag on any other
+      // cached type (a DM, a group) is ignored rather than pinned
+      const type = this.channels.getUnderlyingObject(channelId).channelType;
+      if (type !== undefined && type !== "TextChannel") return;
+
+      if (
+        this.channels.has(channelId) &&
+        this.channels.getUnderlyingObject(channelId).protected !== true
+      ) {
+        this.channels.updateUnderlyingObject(channelId, "protected", true);
+      }
+
+      this.protectedPins.add(channelId);
+      this.#protectedFlagStripped.delete(channelId);
+      this.#notifyProtected("onChannelProtected", channelId);
+      return;
+    }
+
+    const stripped = full || value === false;
+    if (stripped && this.isProtectedChannel(channelId)) {
+      this.#protectedFlagStripped.add(channelId);
+      this.#notifyProtected("onProtectedFlagStripped", channelId);
+    }
+  }
+
+  /**
+   * Call an optional protected-channel adapter hook, never letting a
+   * throwing adapter break event handling.
+   */
+  #notifyProtected(
+    hook: "onChannelProtected" | "onProtectedFlagStripped",
+    channelId: string,
+  ): void {
+    try {
+      this.e2ee?.[hook]?.(channelId);
+    } catch {
+      console.error("[protected] adapter hook failed", { hook, channelId });
     }
   }
 

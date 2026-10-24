@@ -12,6 +12,10 @@ import { decodeTime, ulid } from "ulid";
 import type { Client } from "../Client.js";
 import type { MessageCollection } from "../collections/MessageCollection.js";
 import { MessageFlags, messageFlagAtPosition } from "../hydration/message.js";
+import {
+  type EncryptedPayload,
+  ProtectedChannelEditRefused,
+} from "../lib/protected.js";
 
 import type { Channel } from "./Channel.js";
 import type { CrosspostInfoData } from "./ChannelFollow.js";
@@ -275,6 +279,26 @@ export class Message {
   }
 
   /**
+   * End-to-end encrypted payload of a Protected-channel row, as the server
+   * sent it (for the E2EE adapter; never rendered). Server text fields are
+   * not stored on such rows.
+   */
+  get encrypted(): EncryptedPayload | undefined {
+    return this.#collection.getUnderlyingObject(this.id).encrypted;
+  }
+
+  /**
+   * Whether this is a Protected-channel row: it carries `encrypted`, or its
+   * channel is protected or pinned on this client
+   */
+  get #isProtectedRow(): boolean {
+    return (
+      this.encrypted !== undefined ||
+      this.#collection.client.isProtectedChannel(this.channelId)
+    );
+  }
+
+  /**
    * Whether this message is pinned
    */
   get pinned(): boolean {
@@ -381,6 +405,8 @@ export class Message {
    * already known so a count-only WS update never erases `myVotes`).
    */
   #mergePollState(next: Partial<PollState> & { hydrated?: boolean }): void {
+    // A protected row carries no poll (plan D25); never stamp state on it
+    if (this.#isProtectedRow) return;
     const current = this.pollState;
     this.#collection.updateUnderlyingObject(this.id, "pollState", {
       closed: false,
@@ -536,6 +562,8 @@ export class Message {
    * what is already known so a partial WS update never erases the rest).
    */
   #mergeSoftresState(next: Partial<SoftResState>): void {
+    // A protected row carries no sheet (plan D25); never stamp state on it
+    if (this.#isProtectedRow) return;
     const current = this.softresState;
     this.#collection.updateUnderlyingObject(this.id, "softresState", {
       locked: false,
@@ -832,6 +860,9 @@ export class Message {
    */
   async edit(data: DataEditMessage): Promise<APIMessage> {
     this.#assertNotEncrypted();
+    // Edits are not supported in a Protected channel (S1): a PATCH would
+    // carry the new text in plaintext
+    if (this.#isProtectedRow) throw new ProtectedChannelEditRefused();
     return await this.#collection.client.api.patch(
       `/channels/${this.channelId as ""}/messages/${this.id as ""}`,
       data,
