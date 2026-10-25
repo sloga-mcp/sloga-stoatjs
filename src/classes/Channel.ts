@@ -682,6 +682,7 @@ export class Channel {
    * @returns The newly-created webhook
    */
   async createWebhook(name: string): Promise<ChannelWebhook> {
+    this.#assertNotProtected();
     const webhook = await this.#collection.client.api.post(
       `/channels/${this.id as ""}/webhooks`,
       {
@@ -862,12 +863,25 @@ export class Channel {
 
   /**
    * Refuse a server-mediated plaintext route (poll, soft-reserve sheet,
-   * scheduled message) in a protected or pinned channel. Call first in an
-   * `async` method so the throw is a rejection before any request.
+   * scheduled message, thread, webhook, interaction, follow, crosspost,
+   * caption, text search) in a protected or pinned channel (design 7.4).
+   * Call first in an `async` method so the throw is a rejection before any
+   * request.
    */
   #assertNotProtected(): void {
     if (this.#collection.client.isProtectedChannel(this.id)) {
       throw new ProtectedChannelUnavailable();
+    }
+  }
+
+  /**
+   * Refuse a text search of a protected or pinned channel: the server holds
+   * no readable text and the query itself would leak. The pinned listing
+   * (no `query`) stays allowed (design 7.4, 7.5).
+   */
+  #assertNoProtectedQuery(params: { query?: string | null }): void {
+    if (params.query !== undefined && params.query !== null) {
+      this.#assertNotProtected();
     }
   }
 
@@ -1141,6 +1155,7 @@ export class Channel {
   async search(
     params: Omit<DataMessageSearch, "include_users">,
   ): Promise<Message[]> {
+    this.#assertNoProtectedQuery(params);
     const messages = (await this.#collection.client.api.post(
       `/channels/${this.id as ""}/search`,
       params,
@@ -1168,6 +1183,7 @@ export class Channel {
     users: User[];
     members: ServerMember[] | undefined;
   }> {
+    this.#assertNoProtectedQuery(params);
     const data = (await this.#collection.client.api.post(
       `/channels/${this.id as ""}/search`,
       {
@@ -1222,13 +1238,16 @@ export class Channel {
    * @param fromMessageId Anchor the thread to an existing message in this
    *   channel (`POST .../messages/{msg}/threads`); omit for a standalone thread
    * @requires `TextChannel` — the server rejects DM / Group / SavedMessages /
-   *   Thread parents (E2EE conversations can never host a thread, fail-closed)
+   *   Thread parents (E2EE conversations can never host a thread, fail-closed);
+   *   a protected or pinned channel is refused before any request (the
+   *   thread name would be sent in plaintext)
    * @returns The newly-created thread
    */
   async createThread(
     data: DataCreateThread,
     fromMessageId?: string,
   ): Promise<Channel> {
+    this.#assertNotProtected();
     const thread = (await this.#collection.apiReq(
       "POST",
       fromMessageId
@@ -1484,6 +1503,7 @@ export class Channel {
     commandId: string,
     options?: Record<string, string>,
   ): Promise<string> {
+    this.#assertNotProtected();
     const response = (await this.#collection.apiReq(
       "POST",
       `/channels/${this.id}/interactions`,
@@ -1506,6 +1526,7 @@ export class Channel {
     customId: string,
     values?: string[],
   ): Promise<string> {
+    this.#assertNotProtected();
     const response = (await this.#collection.apiReq(
       "POST",
       `/channels/${this.id}/messages/${messageId}/interact`,
@@ -1936,6 +1957,11 @@ export class Channel {
     serverId: string,
     channelId: string,
   ): Promise<ChannelFollowData> {
+    this.#assertNotProtected();
+    // Crossposts would carry plaintext into the target too (design 7.4)
+    if (this.#collection.client.isProtectedChannel(channelId)) {
+      throw new ProtectedChannelUnavailable();
+    }
     return (await this.#collection.apiReq(
       "POST",
       `/channels/${this.id}/follow`,
@@ -1978,6 +2004,7 @@ export class Channel {
    * @requires `SendMessage` (+ `ManageMessages` for others' messages)
    */
   async crosspostMessage(messageId: string): Promise<void> {
+    this.#assertNotProtected();
     await this.#collection.apiReq(
       "POST",
       `/channels/${this.id}/messages/${messageId}/crosspost`,
@@ -2114,6 +2141,9 @@ export class Channel {
    * @param lang BCP-47 language the speaker was recognized in
    */
   async sendCaption(text: string, lang: string): Promise<void> {
+    // A protected channel can never host a call (voice join refuses, design
+    // 7.4), so this only backstops a plaintext transcript
+    this.#assertNotProtected();
     const client = this.#collection.client;
     const [headerKey, headerValue] = client.authenticationHeader;
     await fetch(`${client.options.baseURL}/channels/${this.id}/captions`, {

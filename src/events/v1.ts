@@ -1265,15 +1265,26 @@ export async function handleEvent(
       break;
     }
     case "ServerCreate": {
-      if (!client.servers.has(event.server._id)) {
-        batch(() => {
+      batch(() => {
+        if (!client.servers.has(event.server._id)) {
           for (const channel of event.channels) {
             client.channels.getOrCreate(channel._id, channel);
           }
 
           client.servers.getOrCreate(event.server._id, event.server, true);
-        });
-      }
+        }
+
+        // One-way, cached or not (plan D1): full channel objects. Applied
+        // for an already-cached server too, since an invite or discovery
+        // join caches the server from its response before this event lands
+        for (const channel of event.channels) {
+          client.applyProtectedFlag(
+            channel._id,
+            (channel as { protected?: unknown }).protected,
+            true,
+          );
+        }
+      });
       break;
     }
     case "ServerUpdate": {

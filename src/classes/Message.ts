@@ -15,6 +15,7 @@ import { MessageFlags, messageFlagAtPosition } from "../hydration/message.js";
 import {
   type EncryptedPayload,
   ProtectedChannelEditRefused,
+  ProtectedChannelUnavailable,
 } from "../lib/protected.js";
 
 import type { Channel } from "./Channel.js";
@@ -757,7 +758,9 @@ export class Message {
   /**
    * Forward this message to another channel. The server copies an
    * immutable snapshot (content + attachments) and verifies this user can
-   * both read the source and send in the destination.
+   * both read the source and send in the destination. Refused before any
+   * request when the source is a protected row or the destination is a
+   * protected or pinned channel (design 7.4): the copy is plaintext.
    * @param destination Channel (or channel id) to forward to
    * @returns The newly-created forward message
    */
@@ -768,6 +771,12 @@ export class Message {
     this.#assertNotEncrypted();
     const destinationId =
       typeof destination === "string" ? destination : destination.id;
+    if (
+      this.#isProtectedRow ||
+      this.#collection.client.isProtectedChannel(destinationId)
+    ) {
+      throw new ProtectedChannelUnavailable();
+    }
 
     const message = (await this.#collection.client.channels.apiReq(
       "POST",

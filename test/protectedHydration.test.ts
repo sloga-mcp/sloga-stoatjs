@@ -2,7 +2,8 @@
  * Protected-channel state from the server is one-way, and server text never
  * lands on a protected row (plan D1, D2, D25).
  *
- * - `protected` on a channel: Ready, ChannelCreate and ChannelUpdate apply
+ * - `protected` on a channel: Ready, ChannelCreate, ChannelUpdate,
+ *   ServerCreate (for a cached server too) and `channels.fetch` apply
  *   `true` (onto a cached channel too), pin it and notify the adapter; an
  *   explicit `protected: false`, or a full object without `true` for a
  *   pinned channel, is reported as stripped and lowers nothing; a partial
@@ -366,6 +367,153 @@ test("a full ChannelCreate without the flag for a pinned channel is a strip", as
   await h.fire({ type: "ChannelCreate", ...textChannel(CH) });
   assert.deepEqual(h.strippedIds, [CH]);
   assert.equal(h.client.isProtectedChannel(CH), true);
+});
+
+/** A ServerCreate for SERVER carrying the given full channel objects. */
+function serverCreate(channels: { _id: string }[]): ServerEvent {
+  return {
+    type: "ServerCreate",
+    id: SERVER,
+    server: {
+      _id: SERVER,
+      owner: OTHER,
+      name: "server",
+      channels: channels.map((channel) => channel._id),
+      default_permissions: 0,
+      roles: {},
+    },
+    channels,
+    emojis: [],
+    voice_states: [],
+  };
+}
+
+test("ServerCreate with a protected channel pins it and notifies onChannelProtected (W4d F#2)", async () => {
+  const h = setup();
+  await h.fire(ready([]));
+
+  await h.fire(
+    serverCreate([textChannel(CH, { protected: true }), textChannel(PLAIN)]),
+  );
+
+  assert.equal(h.client.servers.has(SERVER), true);
+  assert.equal(h.client.channels.get(CH)!.isProtected, true);
+  assert.equal(h.client.protectedPins.has(CH), true);
+  assert.equal(h.client.isProtectedChannel(CH), true);
+  assert.deepEqual(h.protectedIds, [CH]);
+  assert.deepEqual(h.strippedIds, []);
+  assert.equal(h.client.isProtectedChannel(PLAIN), false);
+});
+
+test("a full ServerCreate channel without the flag for a pinned id is a strip (W4d F#2)", async () => {
+  const h = setup([CH2]);
+  await h.fire(ready([]));
+
+  await h.fire(serverCreate([textChannel(CH2), textChannel(PLAIN)]));
+
+  assert.deepEqual(h.strippedIds, [CH2]);
+  assert.equal(h.client.isProtectedFlagStripped(CH2), true);
+  assert.equal(h.client.isProtectedChannel(CH2), true, "the pin holds");
+  assert.equal(h.client.channels.get(CH2)!.isProtected, false);
+  assert.equal(h.client.isProtectedFlagStripped(PLAIN), false);
+  assert.deepEqual(h.protectedIds, []);
+});
+
+test("ServerCreate applies the flag when a join response already cached the server (W4d F#2)", async () => {
+  const h = setup();
+  await h.fire(ready([]));
+  // What PublicInvite.join / DiscoverableServer.join cache before the event
+  const event = serverCreate([textChannel(CH, { protected: true })]);
+  h.client.channels.getOrCreate(
+    CH,
+    textChannel(CH, { protected: true }) as never,
+  );
+  h.client.servers.getOrCreate(SERVER, event.server as never, true);
+  assert.equal(h.client.protectedPins.has(CH), false);
+  assert.deepEqual(h.protectedIds, []);
+
+  await h.fire(event);
+
+  assert.equal(h.client.protectedPins.has(CH), true);
+  assert.deepEqual(h.protectedIds, [CH]);
+});
+
+test("channels.fetch applies the flag from its raw GET: true pins, a pinned id without it is a strip (W4d F#2)", async () => {
+  const h = setup([CH2]);
+  await h.fire(ready([]));
+  const bodies: Record<string, unknown> = {
+    [`/channels/${CH}`]: textChannel(CH, { protected: true }),
+    [`/channels/${CH2}`]: textChannel(CH2),
+  };
+  (h.client.api as unknown as { get: unknown }).get = (path: string) =>
+    Promise.resolve(bodies[path]);
+
+  await h.client.channels.fetch(CH);
+  await h.client.channels.fetch(CH2);
+
+  assert.equal(h.client.channels.get(CH)!.isProtected, true);
+  assert.equal(h.client.protectedPins.has(CH), true);
+  assert.deepEqual(h.protectedIds, [CH]);
+  assert.deepEqual(h.strippedIds, [CH2]);
+  assert.equal(h.client.isProtectedChannel(CH2), true, "the pin holds");
+});
+
+/** Asserts CH is pinned + notified and the pinned CH2 is reported stripped. */
+function assertFlagApplied(h: Harness, path: string): void {
+  assert.equal(h.client.channels.get(CH)!.isProtected, true, path);
+  assert.equal(h.client.protectedPins.has(CH), true, path);
+  assert.deepEqual(h.protectedIds, [CH], path);
+  assert.deepEqual(h.strippedIds, [CH2], path);
+  assert.equal(h.client.isProtectedChannel(CH2), true, `${path}: pin holds`);
+  assert.equal(h.client.isProtectedChannel(PLAIN), false, path);
+}
+
+const FLAGGED_CHANNELS = () => [
+  textChannel(CH, { protected: true }),
+  textChannel(CH2),
+  textChannel(PLAIN),
+];
+
+test("servers.fetch applies the flag to the channels it caches (W4d)", async () => {
+  const h = setup([CH2]);
+  await h.fire(ready([]));
+  const server = serverCreate(FLAGGED_CHANNELS()).server as object;
+  (h.client.api as unknown as { get: unknown }).get = () =>
+    Promise.resolve({ ...server, channels: FLAGGED_CHANNELS() });
+
+  await h.client.servers.fetch(SERVER);
+
+  assert.equal(h.client.servers.has(SERVER), true);
+  assertFlagApplied(h, "servers.fetch");
+});
+
+test("servers.createServer applies the flag to the channels it caches (W4d)", async () => {
+  const h = setup([CH2]);
+  await h.fire(ready([]));
+  const event = serverCreate(FLAGGED_CHANNELS());
+  (h.client.api as unknown as { post: unknown }).post = () =>
+    Promise.resolve({ server: event.server, channels: FLAGGED_CHANNELS() });
+
+  await h.client.servers.createServer({ name: "server" } as never);
+
+  assert.equal(h.client.servers.has(SERVER), true);
+  assertFlagApplied(h, "createServer");
+});
+
+test("server.createChannel applies the flag to the channel it caches (W4d)", async () => {
+  const h = setup([CH2]);
+  await h.fire(ready([]));
+  await h.fire(serverCreate([]));
+  const server = h.client.servers.get(SERVER)!;
+  const bodies = FLAGGED_CHANNELS();
+  (h.client.api as unknown as { post: unknown }).post = () =>
+    Promise.resolve(bodies.shift());
+
+  for (let i = 0; i < 3; i++) {
+    await server.createChannel({ name: "c", type: "Text" } as never);
+  }
+
+  assertFlagApplied(h, "createChannel");
 });
 
 test("the strip latch: set by protected:false, kept by a rename, cleared by true", async () => {

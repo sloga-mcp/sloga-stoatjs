@@ -348,6 +348,135 @@ test("poll, soft-reserve and scheduled routes refuse a protected channel before 
   assert.ok(fetches.some((call) => call.url.includes("/polls")));
 });
 
+test("createThread refuses a protected or pinned channel before any request (W4d F#1)", async () => {
+  for (const anchor of [undefined, SENT]) {
+    for (const id of [PROTECTED, PINNED]) {
+      const { channel, fetches } = setup();
+      const result = await settle(
+        channel(id).createThread({ name: "secret title" } as never, anchor),
+      );
+      assert.ok(
+        !result.ok && result.error instanceof ProtectedChannelUnavailable,
+        `createThread(${anchor}) on ${id}: got ${!result.ok && String(result.error)}`,
+      );
+      assert.deepEqual(fetches, [], `createThread on ${id} made a request`);
+    }
+  }
+
+  // Control: the same route on a plain channel does reach fetch
+  const { channel, fetches } = setup();
+  await settle(channel(PLAIN).createThread({ name: "title" } as never));
+  assert.ok(fetches.some((call) => call.url.includes("/threads")));
+});
+
+/** Plaintext routes the SDK refuses on a protected or pinned channel. */
+const GUARDED: [string, (ch: StoatChannel) => Promise<unknown>, string][] = [
+  ["createWebhook", (ch) => ch.createWebhook("hook"), "/webhooks"],
+  ["search", (ch) => ch.search({ query: "secret" } as never), "/search"],
+  [
+    "searchWithUsers",
+    (ch) => ch.searchWithUsers({ query: "secret" } as never),
+    "/search",
+  ],
+  [
+    "createInteraction",
+    (ch) => ch.createInteraction(KEY, { arg: "secret" }),
+    "/interactions",
+  ],
+  [
+    "interactWithMessage",
+    (ch) => ch.interactWithMessage(SENT, "button"),
+    "/interact",
+  ],
+  ["follow", (ch) => ch.follow(SERVER, PLAIN), "/follow"],
+  ["crosspostMessage", (ch) => ch.crosspostMessage(SENT), "/crosspost"],
+  ["sendCaption", (ch) => ch.sendCaption("secret", "en"), "/captions"],
+];
+
+test("text-carrying and refused server routes throw before any request on a protected or pinned channel (W4d)", async () => {
+  for (const [name, run] of GUARDED) {
+    for (const id of [PROTECTED, PINNED]) {
+      const { channel, fetches } = setup();
+      const result = await settle(run(channel(id)));
+      assert.ok(
+        !result.ok && result.error instanceof ProtectedChannelUnavailable,
+        `${name} on ${id}: got ${!result.ok && String(result.error)}`,
+      );
+      assert.deepEqual(fetches, [], `${name} on ${id} made a request`);
+    }
+  }
+
+  // Control: every route reaches fetch from a plain channel
+  for (const [name, run, route] of GUARDED) {
+    const { channel, fetches } = setup();
+    await settle(run(channel(PLAIN)));
+    assert.ok(
+      fetches.some((call) => call.url.includes(route)),
+      `${name} on a plain channel never reached ${route}`,
+    );
+  }
+});
+
+test("follow refuses a protected or pinned target channel before any request (W4d)", async () => {
+  for (const target of [PROTECTED, PINNED]) {
+    const { channel, fetches } = setup();
+    const result = await settle(channel(PLAIN).follow(SERVER, target));
+    assert.ok(
+      !result.ok && result.error instanceof ProtectedChannelUnavailable,
+      `follow into ${target}: got ${!result.ok && String(result.error)}`,
+    );
+    assert.deepEqual(fetches, [], `follow into ${target} made a request`);
+  }
+});
+
+test("forwardTo refuses a protected or pinned source or destination before any request (W4d)", async () => {
+  const row = (client: StoatClient, channelId: string) =>
+    client.messages.getOrCreate(SENT, {
+      _id: SENT,
+      channel: channelId,
+      author: OTHER,
+      content: "secret",
+    } as never);
+
+  const cases: [string, string, (h: Harness) => string | StoatChannel][] = [];
+  for (const id of [PROTECTED, PINNED]) {
+    cases.push([`into ${id} (id)`, PLAIN, () => id]);
+    cases.push([`into ${id} (channel)`, PLAIN, (h) => h.channel(id)]);
+    cases.push([`from ${id}`, id, () => PLAIN]);
+  }
+  for (const [name, source, destination] of cases) {
+    const h = setup();
+    const result = await settle(
+      row(h.client, source).forwardTo(destination(h), KEY),
+    );
+    assert.ok(
+      !result.ok && result.error instanceof ProtectedChannelUnavailable,
+      `forward ${name}: got ${!result.ok && String(result.error)}`,
+    );
+    assert.deepEqual(h.fetches, [], `forward ${name} made a request`);
+  }
+
+  // Control: a plain-to-plain forward reaches the route
+  const h = setup();
+  await settle(row(h.client, PLAIN).forwardTo(PLAIN, KEY));
+  assert.ok(h.fetches.some((call) => call.url.includes("/forward")));
+});
+
+test("the pinned listing (search without a query) still requests on a protected or pinned channel (W4d)", async () => {
+  for (const id of [PROTECTED, PINNED]) {
+    for (const method of ["search", "searchWithUsers"] as const) {
+      const { channel, fetches } = setup();
+      await settle(channel(id)[method]({ pinned: true } as never));
+      assert.ok(
+        fetches.some(
+          (call) => call.method === "POST" && call.url.includes("/search"),
+        ),
+        `${method} pinned listing on ${id} made no request`,
+      );
+    }
+  }
+});
+
 test("a DM the server flags protected keeps the DM path", async () => {
   const { channel, client } = setup();
   assert.equal(client.isProtectedChannel(DM), false);

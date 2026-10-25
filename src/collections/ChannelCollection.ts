@@ -33,7 +33,14 @@ export class ChannelCollection extends ClassCollection<
     const channel = this.get(id);
     if (channel && !this.isPartial(id)) return channel;
     const data = await this.client.api.get(`/channels/${id as ""}`);
-    return this.getOrCreate(data._id, data);
+    const instance = this.getOrCreate(data._id, data);
+    // A full object from a raw GET: one-way flag, pin and notify (plan D8)
+    this.client.applyProtectedFlag(
+      data._id,
+      (data as { protected?: unknown }).protected,
+      true,
+    );
+    return instance;
   }
 
   /**

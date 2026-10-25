@@ -441,7 +441,15 @@ export class Server {
       data,
     );
 
-    return this.#collection.client.channels.getOrCreate(channel._id, channel);
+    const client = this.#collection.client;
+    const instance = client.channels.getOrCreate(channel._id, channel);
+    // A full object: one-way flag, pin and notify (plan D1)
+    client.applyProtectedFlag(
+      channel._id,
+      (channel as { protected?: unknown }).protected,
+      true,
+    );
+    return instance;
   }
 
   /**
