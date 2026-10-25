@@ -529,6 +529,7 @@ type ServerMessage =
       invite_code: string;
     }
   | { type: "DiscordImportFailed"; job_id: string; error: string }
+  | { type: "ProtBalanceUpdate"; balance: number; version: number }
   | E2EEServerEvent;
 
 /**
@@ -2039,6 +2040,13 @@ export async function handleEvent(
         jobId: event.job_id,
         error: event.error,
       });
+      break;
+    }
+    case "ProtBalanceUpdate": {
+      // Two postings can publish out of order: keep only the newest account version
+      if (event.version <= client.protBalanceVersion) break;
+      client.protBalanceVersion = event.version;
+      client.emit("protBalanceUpdate", event.balance, event.version);
       break;
     }
     case "CalendarEventRsvp": {
