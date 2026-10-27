@@ -1348,12 +1348,15 @@ export class Channel {
   /**
    * Create a post in this forum
    * @param data Post creation data (title, tags, starter message)
-   * @requires `Forum` — the server rejects every other channel type
+   * @requires `Forum` — the server rejects every other channel type; a
+   *   protected or pinned id (one a server relabelled as a forum) is
+   *   refused before any request (the title and starter are plaintext)
    * @returns The newly-created post and its starter message
    */
   async createPost(
     data: DataCreateForumPost,
   ): Promise<{ post: Channel; message: Message }> {
+    this.#assertNotProtected();
     const response = (await this.#collection.apiReq(
       "POST",
       `/channels/${this.id}/posts`,

@@ -489,7 +489,36 @@ const RELABELS: Record<string, Record<string, unknown>> = {
     recipients: [ME, OTHER],
   },
   SavedMessages: { channel_type: "SavedMessages", user: ME },
+  Forum: { channel_type: "Forum", server: SERVER, name: "f" },
 };
+
+test("createPost refuses a protected, pinned or pinned-relabelled-as-forum id before any request (W4e)", async () => {
+  const post = { title: "secret title", content: "secret starter" } as never;
+  for (const id of [PROTECTED, PINNED, RELABELLED]) {
+    const { client, channel, fetches } = setup();
+    client.channels.getOrCreate(RELABELLED, {
+      _id: RELABELLED,
+      ...RELABELS.Forum,
+    } as never);
+    client.protectedPins.add(RELABELLED);
+
+    const result = await settle(channel(id).createPost(post));
+    assert.ok(
+      !result.ok && result.error instanceof ProtectedChannelUnavailable,
+      `createPost on ${id}: got ${!result.ok && String(result.error)}`,
+    );
+    assert.deepEqual(fetches, [], `createPost on ${id} made a request`);
+  }
+
+  // Control: an ordinary (unpinned) forum does reach the route
+  const { client, fetches } = setup();
+  client.channels.getOrCreate(RELABELLED, {
+    _id: RELABELLED,
+    ...RELABELS.Forum,
+  } as never);
+  await settle(client.channels.get(RELABELLED)!.createPost(post));
+  assert.ok(fetches.some((call) => call.url.includes("/posts")));
+});
 
 test("a pinned id the server relabels as another type refuses every send before any request (W4e PB-1)", async () => {
   for (const [type, shape] of Object.entries(RELABELS)) {
