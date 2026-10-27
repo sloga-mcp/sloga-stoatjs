@@ -477,6 +477,67 @@ test("the pinned listing (search without a query) still requests on a protected 
   }
 });
 
+const RELABELLED = "01K6Q00000000000000000000C";
+
+/** A pinned id as the server might re-serve it under another type. */
+const RELABELS: Record<string, Record<string, unknown>> = {
+  Thread: { channel_type: "Thread", server: SERVER, name: "t" },
+  Group: { channel_type: "Group", name: "g", owner: OTHER, recipients: [ME] },
+  DirectMessage: {
+    channel_type: "DirectMessage",
+    active: true,
+    recipients: [ME, OTHER],
+  },
+  SavedMessages: { channel_type: "SavedMessages", user: ME },
+};
+
+test("a pinned id the server relabels as another type refuses every send before any request (W4e PB-1)", async () => {
+  for (const [type, shape] of Object.entries(RELABELS)) {
+    for (const withAdapter of [false, true]) {
+      const { client, fetches } = setup();
+      client.channels.getOrCreate(RELABELLED, {
+        _id: RELABELLED,
+        ...shape,
+        protected: true,
+      } as never);
+      client.protectedPins.add(RELABELLED);
+      assert.equal(client.channels.get(RELABELLED)!.type, type);
+
+      // The DM / Group arms answer "plaintext" (null), as for an
+      // unencrypted conversation, so only the guard stands in the way
+      const reached: string[] = [];
+      if (withAdapter) {
+        client.e2ee = {
+          isEncryptedMessage: () => false,
+          handleDirectMessageSend: () => {
+            reached.push("dm");
+            return Promise.resolve(null);
+          },
+          handleGroupMessageSend: () => {
+            reached.push("group");
+            return Promise.resolve(null);
+          },
+          handleProtectedSend: () => {
+            reached.push("protected");
+            return Promise.resolve({ id: SENT });
+          },
+        } as never;
+      }
+
+      const label = `${type}${withAdapter ? " + adapter" : ""}`;
+      const result = await settle(
+        client.channels.get(RELABELLED)!.sendMessage("secret", KEY),
+      );
+      assert.ok(
+        !result.ok && result.error instanceof ProtectedChannelUnavailable,
+        `${label}: got ${!result.ok && String(result.error)}`,
+      );
+      assert.deepEqual(fetches, [], `${label} made a request`);
+      assert.deepEqual(reached, [], `${label} reached an adapter arm`);
+    }
+  }
+});
+
 test("a DM the server flags protected keeps the DM path", async () => {
   const { channel, client } = setup();
   assert.equal(client.isProtectedChannel(DM), false);

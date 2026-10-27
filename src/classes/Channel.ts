@@ -798,10 +798,13 @@ export class Channel {
     // adapter owns retries with the key. Refused fields throw before the
     // adapter is reached, and none is ever stripped. A pinned channel whose
     // object is not hydrated (no type yet) takes this arm too: fail closed.
-    if (
-      (this.type === "TextChannel" || this.type === undefined) &&
-      this.#collection.client.isProtectedChannel(this.id)
-    ) {
+    // A protected or pinned id the server now serves as any other type
+    // (Thread, Group, DirectMessage, SavedMessages, ...) is refused outright,
+    // before the DM / Group arms and the plaintext route (W4e PB-1).
+    if (this.#collection.client.isProtectedChannel(this.id)) {
+      if (this.type !== "TextChannel" && this.type !== undefined) {
+        throw new ProtectedChannelUnavailable();
+      }
       assertProtectedSendable(msg);
       const e2ee = this.#collection.client.e2ee;
       if (!e2ee?.handleProtectedSend) throw new ProtectedChannelUnavailable();

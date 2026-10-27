@@ -828,9 +828,18 @@ export class Client extends AsyncEventEmitter<Events> {
   applyProtectedFlag(channelId: string, value: unknown, full: boolean): void {
     if (value === true) {
       // Only server text channels can be protected; a flag on any other
-      // cached type (a DM, a group) is ignored rather than pinned
+      // cached type (a DM, a group) is ignored rather than pinned. A channel
+      // this client already holds protected that now arrives as another
+      // type was relabelled by the server: report it as a strip, and keep
+      // the pin (W4e PB-1)
       const type = this.channels.getUnderlyingObject(channelId).channelType;
-      if (type !== undefined && type !== "TextChannel") return;
+      if (type !== undefined && type !== "TextChannel") {
+        if (this.isProtectedChannel(channelId)) {
+          this.#protectedFlagStripped.add(channelId);
+          this.#notifyProtected("onProtectedFlagStripped", channelId);
+        }
+        return;
+      }
 
       if (
         this.channels.has(channelId) &&

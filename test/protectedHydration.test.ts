@@ -580,6 +580,41 @@ test("poll and sheet state events never stamp a protected row", async () => {
   assert.deepEqual(h.emitted, []);
 });
 
+test("a pinned id re-served as another type with protected:true is a strip, never an un-protect (W4e PB-1)", async () => {
+  // Ready on a fresh load: the stored pin, the object now a DM
+  const h = setup([CH2]);
+  await h.fire(
+    ready([
+      {
+        _id: CH2,
+        channel_type: "DirectMessage",
+        active: true,
+        recipients: [ME, OTHER],
+        protected: true,
+      },
+    ]),
+  );
+  assert.deepEqual(h.strippedIds, [CH2]);
+  assert.equal(h.client.isProtectedFlagStripped(CH2), true);
+  assert.equal(h.client.isProtectedChannel(CH2), true, "the pin holds");
+  assert.deepEqual(h.protectedIds, []);
+
+  // ChannelCreate of a pinned id as a thread
+  const t = setup([CH]);
+  await t.fire(ready([]));
+  await t.fire({
+    type: "ChannelCreate",
+    _id: CH,
+    channel_type: "Thread",
+    server: SERVER,
+    name: "thread",
+    protected: true,
+  });
+  assert.deepEqual(t.strippedIds, [CH]);
+  assert.equal(t.client.isProtectedChannel(CH), true, "the pin holds");
+  assert.deepEqual(t.protectedIds, []);
+});
+
 test("a protected flag on a DM is ignored", async () => {
   const h = setup();
   await h.fire({
