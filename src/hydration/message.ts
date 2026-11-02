@@ -22,6 +22,13 @@ import type {
 } from "../classes/SoftRes.js";
 import { SystemMessage } from "../classes/SystemMessage.js";
 import type { Merge } from "../lib/merge.js";
+import {
+  type EncryptedPayload,
+  PROTECTED_STRIPPED_FIELDS,
+  type ProtectedStrippedField,
+  carriesEncrypted,
+  stripProtectedFlags,
+} from "../lib/protected.js";
 
 import type { Hydrate } from "./index.js";
 
@@ -94,20 +101,100 @@ export type HydratedMessage = {
    * "ephemeral" (which would suppress notifications and lie in the UI).
    */
   ephemeral?: boolean;
+  /**
+   * End-to-end encrypted payload of a Protected-channel row, kept as the
+   * server sent it for the E2EE adapter to decrypt. Its presence marks the
+   * row protected (the server refuses it elsewhere), so the server-controlled
+   * fields in `PROTECTED_STRIPPED_FIELDS` are never stored alongside it.
+   */
+  encrypted?: EncryptedPayload;
 };
 
+type MessageInput = Merge<Message> & {
+  thread_id?: string;
+  command_context?: MessageInteractionData;
+  components?: ActionRowData[];
+  poll?: PollDefinitionData;
+  softres?: SoftResDefinitionData;
+  forwarded?: ForwardedSnapshotData;
+  crosspost?: CrosspostInfoData;
+  encrypted?: EncryptedPayload;
+};
+
+/**
+ * Whether a wire message is a protected row whose server-controlled text
+ * must not be stored (plan D25): it carries `encrypted`, or its channel is
+ * protected or pinned on this client.
+ * @param message Wire message
+ * @param ctx Client
+ */
+function isProtectedRow(message: MessageInput, ctx: unknown): boolean {
+  if (carriesEncrypted(message)) return true;
+  const client = ctx as Client | undefined;
+  return (
+    typeof message.channel === "string" &&
+    client?.isProtectedChannel?.(message.channel) === true
+  );
+}
+
+/**
+ * Hydrated key each stripped wire field lands on.
+ */
+const STRIPPED_TARGETS = {
+  content: "content",
+  embeds: "embeds",
+  attachments: "attachments",
+  masquerade: "masquerade",
+  interactions: "interactions",
+  components: "components",
+  system: "systemMessage",
+  replies: "replyIds",
+  mentions: "mentionIds",
+  role_mentions: "roleMentionIds",
+  poll: "poll",
+  softres: "softres",
+  forwarded: "forwarded",
+  crosspost: "crosspost",
+  command_context: "commandContext",
+  webhook: "webhook",
+  thread_id: "threadId",
+} as const satisfies Record<ProtectedStrippedField, keyof HydratedMessage>;
+
+type MessageFunctions = Hydrate<MessageInput, HydratedMessage>["functions"];
+
+/**
+ * Wrap the hydration of every stripped field so a protected row stores
+ * `undefined` there, and clear its mass-mention flag bits.
+ * @param functions Plain hydration functions
+ */
+function withProtectedStripping(functions: MessageFunctions): MessageFunctions {
+  const out = { ...functions } as Record<
+    keyof HydratedMessage,
+    (message: MessageInput, ctx: unknown) => unknown
+  >;
+
+  for (const field of PROTECTED_STRIPPED_FIELDS) {
+    const key = STRIPPED_TARGETS[field];
+    const plain = out[key];
+    out[key] = (message, ctx) =>
+      isProtectedRow(message, ctx) ? undefined : plain(message, ctx);
+  }
+
+  const flags = out.flags;
+  out.flags = (message, ctx) => {
+    const value = flags(message, ctx) as number | undefined;
+    return value != null && isProtectedRow(message, ctx)
+      ? stripProtectedFlags(value)
+      : value;
+  };
+
+  return out as MessageFunctions;
+}
+
 export const messageHydration: Hydrate<
-  // `thread_id`/`command_context`/`components` are additive; stoat-api
-  // 0.13.5 predates them.
-  Merge<Message> & {
-    thread_id?: string;
-    command_context?: MessageInteractionData;
-    components?: ActionRowData[];
-    poll?: PollDefinitionData;
-    softres?: SoftResDefinitionData;
-    forwarded?: ForwardedSnapshotData;
-    crosspost?: CrosspostInfoData;
-  },
+  // `thread_id`/`command_context`/`components`/`encrypted` are additive;
+  // stoat-api 0.13.5 predates them.
+  MessageInput,
   HydratedMessage
 > = {
   keyMapping: {
@@ -125,8 +212,9 @@ export const messageHydration: Hydrate<
     softres: "softres",
     forwarded: "forwarded",
     crosspost: "crosspost",
+    encrypted: "encrypted",
   },
-  functions: {
+  functions: withProtectedStripping({
     id: (message) => message._id,
     nonce: (message) => message.nonce!,
     channelId: (message) => message.channel,
@@ -196,7 +284,9 @@ export const messageHydration: Hydrate<
     // stamp persisted messages "ephemeral"); the
     // InteractionEphemeralMessage handler sets the flag directly.
     ephemeral: () => undefined,
-  },
+    // Kept as-is for the E2EE adapter (plan 4.1); never interpreted here.
+    encrypted: (message) => message.encrypted ?? undefined,
+  }),
   initialHydration: () => ({
     reactions: new ReactiveMap(),
   }),

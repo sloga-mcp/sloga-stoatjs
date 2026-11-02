@@ -41,6 +41,12 @@ export type HydratedChannel = {
   slowmode: number;
   /** Whether this text channel is an announcement channel (crosspost source) */
   announcement: boolean;
+  /**
+   * Whether the server reports this channel as a Protected channel. One-way
+   * once true: `ChannelUpdate` never lowers it (see `Client.isProtectedChannel`
+   * for the pin-aware predicate).
+   */
+  protected: boolean;
 
   lastMessageId?: string;
 
@@ -73,10 +79,12 @@ export type HydratedChannel = {
 };
 
 export const channelHydration: Hydrate<
-  // `announcement` and `spoiler` are additive; stoat-api 0.13.5 predates them.
+  // `announcement`, `spoiler` and `protected` are additive; stoat-api
+  // 0.13.5 predates them.
   Merge<APIChannel | ThreadChannelData | ForumChannelData> & {
     announcement?: boolean;
     spoiler?: boolean;
+    protected?: boolean;
   },
   HydratedChannel
 > = {
@@ -93,6 +101,7 @@ export const channelHydration: Hydrate<
     slowmode: "slowmode",
     announcement: "announcement",
     spoiler: "spoiler",
+    protected: "protected",
     parent_channel: "parentChannelId",
     origin_message_id: "originMessageId",
     creator: "creatorId",
@@ -138,6 +147,12 @@ export const channelHydration: Hydrate<
     lastMessageId: (channel) => channel.last_message_id!,
     slowmode: (channel) => channel.slowmode ?? 0,
     announcement: (channel) => channel.announcement ?? false,
+    // Only a literal `true` on a server text channel counts. Lowering is
+    // refused by the event handlers, which apply partials through
+    // `Client.applyProtectedFlag` instead of this value.
+    protected: (channel) =>
+      channel.protected === true &&
+      (channel.channel_type ?? "TextChannel") === "TextChannel",
     // Present exactly while the SERVER would accept a `join_call` here. The
     // wire object carries `voice` on groups and server text channels, and
     // with it `disabled` (not in the generated API type yet), which keeps a
@@ -184,5 +199,6 @@ export const channelHydration: Hydrate<
     requireTag: false,
     announcement: false,
     spoiler: false,
+    protected: false,
   }),
 };
