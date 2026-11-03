@@ -87,7 +87,15 @@ export type ConfigLimits = LimitsConfig & {
  * Server configuration, including fields newer than the published API types
  */
 export type ClientConfiguration = RevoltConfig & {
-  features: RevoltConfig["features"] & { limits: ConfigLimits };
+  features: RevoltConfig["features"] & {
+    limits: ConfigLimits;
+
+    /**
+     * Server kill switch for encrypted calls on iOS; absent on servers that
+     * predate it
+     */
+    ios_call_e2ee?: boolean;
+  };
 };
 
 /**
