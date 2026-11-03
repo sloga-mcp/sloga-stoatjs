@@ -22,3 +22,4 @@ export * from "./lib/regex.js";
 export type * from "./lib/watch.js";
 export * from "./permissions/definitions.js";
 export * from "./types/perks.js";
+export * from "./types/prot.js";
