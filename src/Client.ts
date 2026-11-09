@@ -88,7 +88,11 @@ export type ConfigLimits = LimitsConfig & {
  * Server configuration, including fields newer than the published API types
  */
 export type ClientConfiguration = RevoltConfig & {
-  features: RevoltConfig["features"] & { limits: ConfigLimits };
+  features: RevoltConfig["features"] & {
+    limits: ConfigLimits;
+    // Typing only: the client reads this from `GET /` itself.
+    e2ee?: { split_from?: boolean };
+  };
 };
 
 /**
