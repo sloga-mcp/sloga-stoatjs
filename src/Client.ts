@@ -527,6 +527,12 @@ export type Events = {
   /** A Discord import failed permanently; `error` is already user-safe. */
   discordImportFailed: [failure: { jobId: string; error: string }];
 
+  /**
+   * The session user's Prot wallet balance changed. Only the newest account
+   * `version` is emitted; equal or older versions are dropped.
+   */
+  protBalanceUpdate: [balance: number, version: number];
+
   reportCreate: [
     report: {
       id: string;
@@ -655,6 +661,8 @@ export class Client extends AsyncEventEmitter<Events> {
    * session (see {@link Client.isProtectedFlagStripped}). In memory only.
    */
   readonly #protectedFlagStripped = new ReactiveSet<string>();
+  /** @internal Newest ProtBalanceUpdate version seen (0 = none); see events/v1.ts */
+  protBalanceVersion = 0;
 
   readonly ready: Accessor<boolean>;
   #setReady: Setter<boolean>;
