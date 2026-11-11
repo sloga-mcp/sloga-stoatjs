@@ -76,6 +76,11 @@ export type ProtMe = {
   pending_order?: ProtPendingView;
   /** Newest first, at most 20 */
   recent: ProtLedgerView[];
+  /**
+   * This account may buy in-app Prot packs before the stores open. Sent only
+   * when true; absent otherwise and from servers older than in-app purchases.
+   */
+  store_preview?: boolean;
 };
 
 /**
@@ -107,6 +112,11 @@ export type ProtFeature = {
    * price). Absent from servers older than fuel tanks.
    */
   tank?: ProtTankFeature;
+  /**
+   * In-app Prot packs. Absent from servers older than in-app purchases.
+   * Per-user preview access is `ProtMe.store_preview`, not here.
+   */
+  store?: ProtStoreFeature;
 };
 
 /**
@@ -367,4 +377,94 @@ export type ProtPledgeResponse = {
   balance: number;
   already_applied: boolean;
   notice: string;
+};
+
+/**
+ * Which app store a purchase came through
+ */
+export type ProtStore = "apple" | "play";
+
+/**
+ * One store product on sale, as advertised in the root config
+ */
+export type ProtStoreProductView = {
+  store: ProtStore;
+  product_id: string;
+  /** Prot credited per unit */
+  prot: number;
+};
+
+/**
+ * In-app Prot packs advertised in the root config (`features.prot.store`).
+ * A config the server would refuse is advertised closed with no products.
+ * Every configured product is listed even while both stores are closed,
+ * since preview accounts buy them.
+ */
+export type ProtStoreFeature = {
+  /** In-app sales are on for the App Store and its credentials are set */
+  apple_open: boolean;
+  /** In-app sales are on for Google Play and its credentials are set */
+  play_open: boolean;
+  products: ProtStoreProductView[];
+  us_web_link: boolean;
+};
+
+/**
+ * POST /payments/prot/store/intent
+ */
+export type DataProtStoreIntent = {
+  store: ProtStore;
+  /** 1-64 chars */
+  product_id: string;
+};
+
+/**
+ * Response to a purchase intent
+ */
+export type ProtStoreIntentResponse = {
+  /** Intent id (ULID) */
+  intent_id: string;
+  /**
+   * One-time token bound to the purchase: Apple `appAccountToken` (UUID v4,
+   * lowercase), Play `obfuscatedAccountId` (43 chars base64url)
+   */
+  token: string;
+  prot: number;
+  product_id: string;
+  expires_at: number;
+};
+
+/**
+ * POST /payments/prot/store/verify. Apple sends `signed_transaction`; Play
+ * sends `product_id` and `purchase_token`
+ */
+export type DataProtStoreVerify = {
+  store: ProtStore;
+  /** 1-65536 chars */
+  signed_transaction?: string;
+  /** 1-64 chars */
+  product_id?: string;
+  /** 1-1024 chars */
+  purchase_token?: string;
+};
+
+/**
+ * Response to a verify
+ */
+export type ProtStoreVerifyResponse = {
+  /** `pending`: Play PENDING, or a verified purchase held (credit paused) */
+  status: "credited" | "already_credited" | "pending" | "rejected";
+  reason?:
+    | "test"
+    | "unbound"
+    | "refunded"
+    | "unknown_product"
+    | "wrong_account"
+    | "no_buyer";
+  /** Store purchase id (`apple:prod:...` / `play:...`), whenever a row exists */
+  purchase_id?: string;
+  /** Wallet balance after a credit (credited / already_credited) */
+  balance?: number;
+  /** The `purchase:{id}` ledger row (credited / already_credited) */
+  ledger_id?: string;
 };
