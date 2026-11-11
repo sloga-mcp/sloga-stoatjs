@@ -66,10 +66,23 @@ export type E2EERejoinIntent = {
  */
 export type E2EEServerEvent =
   | ({ type: "E2EEMessage" } & E2EEEnvelope)
-  | { type: "E2EEDeviceCreate"; user_id: string; device_id: string }
+  // `split_from`: the device this one was split from ("make this a separate
+  // device"). Only on the owner's private topic, never to peers.
+  | {
+      type: "E2EEDeviceCreate";
+      user_id: string;
+      device_id: string;
+      split_from?: string;
+    }
   | { type: "E2EEDeviceDelete"; user_id: string; device_id: string }
   | { type: "E2EEChallenge"; nonce: string }
-  | { type: "E2EEClaimResult"; device_id: string; accepted: boolean }
+  // `reason` is set only on a refused claim. Treat unknown values as absent.
+  | {
+      type: "E2EEClaimResult";
+      device_id: string;
+      accepted: boolean;
+      reason?: "held_elsewhere" | "removed" | (string & {});
+    }
   // Media E2EE (MLS, slice 6). Fanned out on the recipient user's private
   // topic like E2EEMessage; the adapter routes them to the active call
   // session. `MlsJoinRequested` is the admit trigger; `MlsCommit` /

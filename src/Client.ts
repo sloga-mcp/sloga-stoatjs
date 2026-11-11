@@ -1,5 +1,5 @@
 import type { Accessor, Setter } from "solid-js";
-import { batch, createSignal } from "solid-js";
+import { batch, createSignal, untrack } from "solid-js";
 
 import { ReactiveMap } from "@solid-primitives/map";
 import { ReactiveSet } from "@solid-primitives/set";
@@ -64,6 +64,7 @@ import {
   RE_MENTIONS,
   RE_SPOILER,
 } from "./lib/regex.js";
+import type { ProtTankSummary } from "./types/prot.js";
 
 export type Session = { _id: string; token: string; user_id: string } | string;
 
@@ -87,7 +88,11 @@ export type ConfigLimits = LimitsConfig & {
  * Server configuration, including fields newer than the published API types
  */
 export type ClientConfiguration = RevoltConfig & {
-  features: RevoltConfig["features"] & { limits: ConfigLimits };
+  features: RevoltConfig["features"] & {
+    limits: ConfigLimits;
+    // Typing only: the client reads this from `GET /` itself.
+    e2ee?: { split_from?: boolean };
+  };
 };
 
 /**
@@ -523,6 +528,13 @@ export type Events = {
    */
   protBalanceUpdate: [balance: number, version: number];
 
+  /**
+   * A Protected channel's fuel tank changed (`tank` set) or went away
+   * (`undefined`). Emitted after {@link Client.protTanks} is updated; an
+   * older version of the stored tank is dropped and not emitted.
+   */
+  protTankUpdate: [channelId: string, tank: ProtTankSummary | undefined];
+
   reportCreate: [
     report: {
       id: string;
@@ -639,9 +651,6 @@ export class Client extends AsyncEventEmitter<Events> {
    */
   e2ee: E2EEAdapter | undefined;
 
-  /** @internal Newest ProtBalanceUpdate version seen (0 = none); see events/v1.ts */
-  protBalanceVersion = 0;
-
   /**
    * Channel ids this device has seen protected (one-way, persisted per user
    * by the SDK itself; loaded at the top of Ready). See
@@ -654,6 +663,15 @@ export class Client extends AsyncEventEmitter<Events> {
    * session (see {@link Client.isProtectedFlagStripped}). In memory only.
    */
   readonly #protectedFlagStripped = new ReactiveSet<string>();
+  /** @internal Newest ProtBalanceUpdate version seen (0 = none); see events/v1.ts */
+  protBalanceVersion = 0;
+
+  /**
+   * Fuel tank summaries by channel id, from `ProtTankUpdate` events and REST
+   * reads (written only through {@link Client.setProtTank}). No entry = no
+   * tank known. Reactive (Solid); not persisted.
+   */
+  readonly protTanks = new ReactiveMap<string, ProtTankSummary>();
 
   readonly ready: Accessor<boolean>;
   #setReady: Setter<boolean>;
@@ -788,6 +806,41 @@ export class Client extends AsyncEventEmitter<Events> {
       const ref = new WeakRef(this);
       window.addEventListener("pagehide", () => ref.deref()?.flushAcks());
     }
+  }
+
+  /**
+   * Store a channel's fuel tank summary in {@link Client.protTanks}, or drop
+   * it (`undefined` = the channel has no tank, e.g. a REST `NotFound`). Used
+   * by `ProtTankUpdate` and by REST reads.
+   *
+   * Events and reads can arrive out of order, so a summary of the SAME tank
+   * replaces the stored one only if its `(version, balance_version)` is
+   * lexicographically equal or newer. A summary of a different tank (another
+   * `tank_id`) always replaces it: a channel's replacement tank starts again
+   * at version 0, and comparing versions across tanks would pin a stale tank
+   * whose removal this client missed.
+   * @param channelId Channel id
+   * @param tank Tank summary, or `undefined` for no tank
+   */
+  setProtTank(channelId: string, tank: ProtTankSummary | undefined): void {
+    if (!tank) {
+      this.protTanks.delete(channelId);
+      return;
+    }
+
+    // Untracked: a caller in an effect must not subscribe to the key it writes
+    const stored = untrack(() => this.protTanks.get(channelId));
+    if (
+      stored &&
+      stored.tank_id === tank.tank_id &&
+      (tank.version < stored.version ||
+        (tank.version === stored.version &&
+          tank.balance_version < stored.balance_version))
+    ) {
+      return;
+    }
+
+    this.protTanks.set(channelId, tank);
   }
 
   /**
