@@ -95,6 +95,8 @@ export type ClientConfiguration = RevoltConfig & {
      * predate it
      */
     ios_call_e2ee?: boolean;
+    // Typing only: the client reads this from `GET /` itself.
+    e2ee?: { split_from?: boolean };
   };
 };
 
