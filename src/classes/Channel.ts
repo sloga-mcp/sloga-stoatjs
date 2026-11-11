@@ -24,6 +24,10 @@ import {
   isPlausibleMessageUlid,
 } from "../lib/encryptedMessage.js";
 import {
+  ProtectedChannelUnavailable,
+  assertProtectedSendable,
+} from "../lib/protected.js";
+import {
   bitwiseAndEq,
   calculatePermission,
 } from "../permissions/calculator.js";
@@ -678,6 +682,7 @@ export class Channel {
    * @returns The newly-created webhook
    */
   async createWebhook(name: string): Promise<ChannelWebhook> {
+    this.#assertNotProtected();
     const webhook = await this.#collection.client.api.post(
       `/channels/${this.id as ""}/webhooks`,
       {
@@ -787,6 +792,25 @@ export class Channel {
       msg.flags |= 1;
     }
 
+    // Protected-channel choke point (plan 4.1): every send to a protected
+    // or pinned text channel goes to the adapter, which encrypts or THROWS.
+    // There is no plaintext fallthrough and no Idempotency-Key here; the
+    // adapter owns retries with the key. Refused fields throw before the
+    // adapter is reached, and none is ever stripped. A pinned channel whose
+    // object is not hydrated (no type yet) takes this arm too: fail closed.
+    // A protected or pinned id the server now serves as any other type
+    // (Thread, Group, DirectMessage, SavedMessages, ...) is refused outright,
+    // before the DM / Group arms and the plaintext route (W4e PB-1).
+    if (this.#collection.client.isProtectedChannel(this.id)) {
+      if (this.type !== "TextChannel" && this.type !== undefined) {
+        throw new ProtectedChannelUnavailable();
+      }
+      assertProtectedSendable(msg);
+      const e2ee = this.#collection.client.e2ee;
+      if (!e2ee?.handleProtectedSend) throw new ProtectedChannelUnavailable();
+      return e2ee.handleProtectedSend(this, msg, idempotencyKey);
+    }
+
     // E2EE choke point — every DM send passes through here BEFORE the
     // plaintext path. The native layer decides the conversation's mode
     // from local truth; a non-null result means the message went out
@@ -841,6 +865,30 @@ export class Channel {
   }
 
   /**
+   * Refuse a server-mediated plaintext route (poll, soft-reserve sheet,
+   * scheduled message, thread, webhook, interaction, follow, crosspost,
+   * caption, text search) in a protected or pinned channel (design 7.4).
+   * Call first in an `async` method so the throw is a rejection before any
+   * request.
+   */
+  #assertNotProtected(): void {
+    if (this.#collection.client.isProtectedChannel(this.id)) {
+      throw new ProtectedChannelUnavailable();
+    }
+  }
+
+  /**
+   * Refuse a text search of a protected or pinned channel: the server holds
+   * no readable text and the query itself would leak. The pinned listing
+   * (no `query`) stays allowed (design 7.4, 7.5).
+   */
+  #assertNoProtectedQuery(params: { query?: string | null }): void {
+    if (params.query !== undefined && params.query !== null) {
+      this.#assertNotProtected();
+    }
+  }
+
+  /**
    * Create a poll in this channel. The server assembles the message
    * (Poll flag + embedded definition) and counts votes authoritatively.
    * @param data Poll creation data
@@ -852,6 +900,7 @@ export class Channel {
     data: DataPollCreate,
     idempotencyKey: string = ulid(),
   ): Promise<Message> {
+    this.#assertNotProtected();
     const message = (await this.#collection.apiReq(
       "POST",
       `/channels/${this.id}/polls`,
@@ -882,6 +931,7 @@ export class Channel {
     data: DataSoftResCreate,
     idempotencyKey: string = ulid(),
   ): Promise<Message> {
+    this.#assertNotProtected();
     const message = (await this.#collection.apiReq(
       "POST",
       `/channels/${this.id}/softres`,
@@ -914,6 +964,7 @@ export class Channel {
     scheduledAt: number,
     idempotencyKey: string = ulid(),
   ): Promise<ScheduledMessageData> {
+    this.#assertNotProtected();
     const row = (await this.#collection.apiReq(
       "POST",
       `/channels/${this.id}/scheduled_messages`,
@@ -978,7 +1029,35 @@ export class Channel {
       `/channels/${this.id as ""}/messages/${messageId as ""}`,
     );
 
-    return this.#collection.client.messages.getOrCreate(message._id, message);
+    const row = this.#collection.client.messages.getOrCreate(
+      message._id,
+      message,
+    );
+    this.#decryptProtected([row]);
+    return row;
+  }
+
+  /**
+   * Hand fetched protected rows to the E2EE adapter to decrypt (fire and
+   * forget; the rows are already stored without server text). Every row
+   * of a protected or pinned channel goes, and elsewhere any row that
+   * carries `encrypted`.
+   * @param rows Fetched messages
+   */
+  #decryptProtected(rows: Message[]): void {
+    const client = this.#collection.client;
+    const batchRows = client.isProtectedChannel(this.id)
+      ? rows
+      : rows.filter((row) => row.encrypted !== undefined);
+    if (!batchRows.length) return;
+
+    try {
+      client.e2ee?.decryptProtectedHistory?.(this, batchRows);
+    } catch {
+      console.error("[protected] decryptProtectedHistory failed", {
+        channelId: this.id,
+      });
+    }
   }
 
   /**
@@ -1012,9 +1091,11 @@ export class Channel {
       { ...params },
     )) as APIMessage[];
 
-    return messages.map((message) =>
+    const rows = messages.map((message) =>
       this.#collection.client.messages.getOrCreate(message._id, message),
     );
+    this.#decryptProtected(rows);
+    return rows;
   }
 
   /**
@@ -1053,7 +1134,7 @@ export class Channel {
       { ...params, include_users: true },
     )) as { messages: APIMessage[]; users: APIUser[]; members?: APIMember[] };
 
-    return batch(() => ({
+    const result = batch(() => ({
       messages: data.messages.map((message) =>
         this.#collection.client.messages.getOrCreate(message._id, message),
       ),
@@ -1064,6 +1145,8 @@ export class Channel {
         this.#collection.client.serverMembers.getOrCreate(member._id, member),
       ),
     }));
+    this.#decryptProtected(result.messages);
+    return result;
   }
 
   /**
@@ -1075,16 +1158,19 @@ export class Channel {
   async search(
     params: Omit<DataMessageSearch, "include_users">,
   ): Promise<Message[]> {
+    this.#assertNoProtectedQuery(params);
     const messages = (await this.#collection.client.api.post(
       `/channels/${this.id as ""}/search`,
       params,
     )) as APIMessage[];
 
-    return batch(() =>
+    const rows = batch(() =>
       messages.map((message) =>
         this.#collection.client.messages.getOrCreate(message._id, message),
       ),
     );
+    this.#decryptProtected(rows);
+    return rows;
   }
 
   /**
@@ -1100,6 +1186,7 @@ export class Channel {
     users: User[];
     members: ServerMember[] | undefined;
   }> {
+    this.#assertNoProtectedQuery(params);
     const data = (await this.#collection.client.api.post(
       `/channels/${this.id as ""}/search`,
       {
@@ -1108,7 +1195,7 @@ export class Channel {
       },
     )) as { messages: APIMessage[]; users: APIUser[]; members?: APIMember[] };
 
-    return batch(() => ({
+    const result = batch(() => ({
       messages: data.messages.map((message) =>
         this.#collection.client.messages.getOrCreate(message._id, message),
       ),
@@ -1119,6 +1206,8 @@ export class Channel {
         this.#collection.client.serverMembers.getOrCreate(member._id, member),
       ),
     }));
+    this.#decryptProtected(result.messages);
+    return result;
   }
 
   /**
@@ -1152,13 +1241,16 @@ export class Channel {
    * @param fromMessageId Anchor the thread to an existing message in this
    *   channel (`POST .../messages/{msg}/threads`); omit for a standalone thread
    * @requires `TextChannel` — the server rejects DM / Group / SavedMessages /
-   *   Thread parents (E2EE conversations can never host a thread, fail-closed)
+   *   Thread parents (E2EE conversations can never host a thread, fail-closed);
+   *   a protected or pinned channel is refused before any request (the
+   *   thread name would be sent in plaintext)
    * @returns The newly-created thread
    */
   async createThread(
     data: DataCreateThread,
     fromMessageId?: string,
   ): Promise<Channel> {
+    this.#assertNotProtected();
     const thread = (await this.#collection.apiReq(
       "POST",
       fromMessageId
@@ -1256,12 +1348,15 @@ export class Channel {
   /**
    * Create a post in this forum
    * @param data Post creation data (title, tags, starter message)
-   * @requires `Forum` — the server rejects every other channel type
+   * @requires `Forum` — the server rejects every other channel type; a
+   *   protected or pinned id (one a server relabelled as a forum) is
+   *   refused before any request (the title and starter are plaintext)
    * @returns The newly-created post and its starter message
    */
   async createPost(
     data: DataCreateForumPost,
   ): Promise<{ post: Channel; message: Message }> {
+    this.#assertNotProtected();
     const response = (await this.#collection.apiReq(
       "POST",
       `/channels/${this.id}/posts`,
@@ -1414,6 +1509,7 @@ export class Channel {
     commandId: string,
     options?: Record<string, string>,
   ): Promise<string> {
+    this.#assertNotProtected();
     const response = (await this.#collection.apiReq(
       "POST",
       `/channels/${this.id}/interactions`,
@@ -1436,6 +1532,7 @@ export class Channel {
     customId: string,
     values?: string[],
   ): Promise<string> {
+    this.#assertNotProtected();
     const response = (await this.#collection.apiReq(
       "POST",
       `/channels/${this.id}/messages/${messageId}/interact`,
@@ -1835,6 +1932,15 @@ export class Channel {
   }
 
   /**
+   * Whether the server reports this channel as a Protected channel (one-way
+   * once seen). Use `client.isProtectedChannel(id)` for decisions: it also
+   * honours this device's pins.
+   */
+  get isProtected(): boolean {
+    return this.#collection.getUnderlyingObject(this.id).protected === true;
+  }
+
+  /**
    * Whether this is a server text channel flagged as an announcement channel
    * (other servers' channels can follow it, and its messages can be
    * published / crossposted).
@@ -1857,6 +1963,11 @@ export class Channel {
     serverId: string,
     channelId: string,
   ): Promise<ChannelFollowData> {
+    this.#assertNotProtected();
+    // Crossposts would carry plaintext into the target too (design 7.4)
+    if (this.#collection.client.isProtectedChannel(channelId)) {
+      throw new ProtectedChannelUnavailable();
+    }
     return (await this.#collection.apiReq(
       "POST",
       `/channels/${this.id}/follow`,
@@ -1899,6 +2010,7 @@ export class Channel {
    * @requires `SendMessage` (+ `ManageMessages` for others' messages)
    */
   async crosspostMessage(messageId: string): Promise<void> {
+    this.#assertNotProtected();
     await this.#collection.apiReq(
       "POST",
       `/channels/${this.id}/messages/${messageId}/crosspost`,
@@ -2035,6 +2147,9 @@ export class Channel {
    * @param lang BCP-47 language the speaker was recognized in
    */
   async sendCaption(text: string, lang: string): Promise<void> {
+    // A protected channel can never host a call (voice join refuses, design
+    // 7.4), so this only backstops a plaintext transcript
+    this.#assertNotProtected();
     const client = this.#collection.client;
     const [headerKey, headerValue] = client.authenticationHeader;
     await fetch(`${client.options.baseURL}/channels/${this.id}/captions`, {

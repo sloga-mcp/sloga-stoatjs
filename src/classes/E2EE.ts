@@ -27,6 +27,38 @@ export type E2EEEnvelope = {
   group_id?: string;
   /** MLS epoch this envelope establishes (mls_* content only) */
   epoch?: number;
+  /**
+   * Commit declarations (protected-channel text groups, design 8.1). The
+   * device that committed; passed through as absent when absent (native
+   * decides).
+   */
+  committer?: E2EEMemberDevice;
+  /** Devices the commit adds (absent = none) */
+  added?: E2EEMemberDevice[];
+  /** Devices the commit removes (absent = none) */
+  removed?: E2EEMemberDevice[];
+  /** Rejoin intents the commit honours (absent = none) */
+  rejoin_intents?: E2EERejoinIntent[];
+};
+
+/**
+ * A member device named in an MLS commit declaration.
+ */
+export type E2EEMemberDevice = {
+  user_id: string;
+  device_id: string;
+};
+
+/**
+ * A signed join intent declared by a commit (`rejoin_intents`).
+ */
+export type E2EERejoinIntent = {
+  group_id: string;
+  channel_id: string;
+  user_id: string;
+  device_id: string;
+  key_package_ref: string;
+  signature: string;
 };
 
 /**
@@ -34,10 +66,23 @@ export type E2EEEnvelope = {
  */
 export type E2EEServerEvent =
   | ({ type: "E2EEMessage" } & E2EEEnvelope)
-  | { type: "E2EEDeviceCreate"; user_id: string; device_id: string }
+  // `split_from`: the device this one was split from ("make this a separate
+  // device"). Only on the owner's private topic, never to peers.
+  | {
+      type: "E2EEDeviceCreate";
+      user_id: string;
+      device_id: string;
+      split_from?: string;
+    }
   | { type: "E2EEDeviceDelete"; user_id: string; device_id: string }
   | { type: "E2EEChallenge"; nonce: string }
-  | { type: "E2EEClaimResult"; device_id: string; accepted: boolean }
+  // `reason` is set only on a refused claim. Treat unknown values as absent.
+  | {
+      type: "E2EEClaimResult";
+      device_id: string;
+      accepted: boolean;
+      reason?: "held_elsewhere" | "removed" | (string & {});
+    }
   // Media E2EE (MLS, slice 6). Fanned out on the recipient user's private
   // topic like E2EEMessage; the adapter routes them to the active call
   // session. `MlsJoinRequested` is the admit trigger; `MlsCommit` /
@@ -194,4 +239,64 @@ export interface E2EEAdapter {
    * device-list change, claim challenge/result).
    */
   onEvent(event: E2EEServerEvent): void;
+
+  // Protected channels (S1). All optional: an adapter without them makes
+  // every protected send throw `ProtectedChannelUnavailable`, and nothing
+  // else changes.
+
+  /**
+   * Send to a protected channel: THE choke point for protected sends,
+   * called by `Channel.sendMessage` for every send to a protected or pinned
+   * text channel. Encrypts natively and delivers, or THROWS. Never resolves
+   * `null` and never falls back to plaintext. The SDK has already refused
+   * attachments, stickers, embeds, masquerade and interactions; the
+   * adapter, not the SDK, owns `Idempotency-Key` handling (`idempotencyKey`
+   * is the Draft/outbox key).
+   */
+  handleProtectedSend?(
+    channel: Channel,
+    data: E2EEDataMessageSend,
+    idempotencyKey: string,
+  ): Promise<Message>;
+
+  /**
+   * A live `Message` event for a protected row was stored (server text
+   * already stripped). The adapter decrypts it into its own view.
+   */
+  onProtectedMessage?(message: Message): void;
+
+  /**
+   * Protected rows were fetched (history, single fetch, search). Fire and
+   * forget: the rows are stored stripped; the adapter decrypts them.
+   */
+  decryptProtectedHistory?(channel: Channel, messages: Message[]): void;
+
+  /**
+   * The server lowered or omitted `protected` for a channel this device has
+   * pinned protected (an explicit `protected: false`, or a full channel
+   * object without `protected: true`). The pin keeps it protected locally.
+   */
+  onProtectedFlagStripped?(channelId: string): void;
+
+  /**
+   * A channel was seen with `protected: true` (Ready, ChannelCreate,
+   * ChannelUpdate, or a full refetch); it is now pinned.
+   */
+  onChannelProtected?(channelId: string): void;
 }
+
+export {
+  PROTECTED_REFUSED_SEND_FIELDS,
+  PROTECTED_STRIPPED_FIELDS,
+  ProtectedChannelEditRefused,
+  ProtectedChannelUnavailable,
+  ProtectedFieldRefusedClient,
+} from "../lib/protected.js";
+export type {
+  DataProtectedSend,
+  EncryptedPayload,
+  ProtectedRefusedSendField,
+  ProtectedStrippedField,
+} from "../lib/protected.js";
+export { ProtectedPinSet } from "../lib/protectedPins.js";
+export type { ProtectedPinStorage } from "../lib/protectedPins.js";

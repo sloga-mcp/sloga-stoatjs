@@ -39,6 +39,7 @@ import { VoiceParticipant } from "../classes/VoiceParticipant.js";
 import { UNREAD_COUNT_CAP } from "../hydration/channelUnread.js";
 import type { WatchSessionData } from "../lib/watch.js";
 import { hydrate } from "../hydration/index.js";
+import { carriesEncrypted } from "../lib/protected.js";
 
 import { redactEventForLog } from "./EventClient.js";
 
@@ -648,6 +649,30 @@ function isEncryptedRow(client: Client, id: string): boolean {
 }
 
 /**
+ * Whether a server message event targets a Protected-channel row (plan D2):
+ * its channel is protected or pinned, the event data carries `encrypted`,
+ * or the cached row does. Such rows take only pin changes from the server.
+ * Unlike `isEncryptedRow`, delete, reactions and acks still apply.
+ * @param client Client
+ * @param channelId Channel id from the event
+ * @param id Message id
+ * @param data Event data, if any
+ */
+function isProtectedRowEvent(
+  client: Client,
+  channelId: string,
+  id: string,
+  data?: object,
+): boolean {
+  return (
+    client.isProtectedChannel(channelId) ||
+    (data !== undefined && carriesEncrypted(data)) ||
+    (client.messages.has(id) &&
+      client.messages.getUnderlyingObject(id).encrypted !== undefined)
+  );
+}
+
+/**
  * Handle an event for the Client
  * @param client Client
  * @param event Event
@@ -670,6 +695,13 @@ export async function handleEvent(
       break;
     }
     case "Ready": {
+      // Load this user's protected pins before any channel is applied, so
+      // the one-way flag and the D25 strip see them (plan D9a)
+      const selfId =
+        event.users?.find((user) => user.relationship === "User")?._id ??
+        client.user?.id;
+      if (selfId) client.protectedPins.loadFor(selfId);
+
       batch(() => {
         if (event.users) {
           for (const user of event.users) {
@@ -696,6 +728,13 @@ export async function handleEvent(
         if (event.channels) {
           for (const channel of event.channels) {
             const instance = client.channels.getOrCreate(channel._id, channel);
+            // One-way: `true` lands on an already-cached channel too; a
+            // pinned channel without it is reported as stripped (plan D1)
+            client.applyProtectedFlag(
+              channel._id,
+              (channel as { protected?: unknown }).protected,
+              true,
+            );
             // Ready only ever includes threads the user has JOINED, so seed
             // self-membership — the wire shape carries no membership list.
             if (instance.isThread && client.user) {
@@ -747,6 +786,14 @@ export async function handleEvent(
       // never create or replace a row shown as decrypted, so it is dropped
       // before any hydration, unread count or emit.
       if (isEncryptedRow(client, event._id)) break;
+      // A protected row is stored without server text (hydration strips
+      // it); its server mentions and attachments never touch unread state
+      const protectedRow = isProtectedRowEvent(
+        client,
+        event.channel,
+        event._id,
+        event,
+      );
       batch(() => {
         const channel = client.channels.get(event.channel);
 
@@ -793,7 +840,11 @@ export async function handleEvent(
                 Math.min(unread.unreadCount + 1, UNREAD_COUNT_CAP),
               );
 
-              if (event.attachments?.length && !unread.unreadHasAttachments) {
+              if (
+                !protectedRow &&
+                event.attachments?.length &&
+                !unread.unreadHasAttachments
+              ) {
                 client.channelUnreads.updateUnderlyingObject(
                   channel.id,
                   "unreadHasAttachments",
@@ -801,7 +852,7 @@ export async function handleEvent(
                 );
               }
 
-              if (event.mentions?.includes(client.user!.id)) {
+              if (!protectedRow && event.mentions?.includes(client.user!.id)) {
                 unread.messageMentionIds.add(event._id);
               }
             }
@@ -822,10 +873,43 @@ export async function handleEvent(
           );
         }
       });
+
+      // Hand the stored (stripped) protected row to the adapter to decrypt
+      if (protectedRow) {
+        const message = client.messages.get(event._id);
+        if (message) {
+          try {
+            client.e2ee?.onProtectedMessage?.(message);
+          } catch {
+            console.error("[protected] onProtectedMessage failed", {
+              messageId: event._id,
+            });
+          }
+        }
+      }
       break;
     }
     case "MessageUpdate": {
       if (isEncryptedRow(client, event.id)) break;
+      if (isProtectedRowEvent(client, event.channel, event.id, event.data)) {
+        // Protected row (plan D2): only the pin state is server-controlled.
+        // No edit stamp, no content, no other field.
+        const message = client.messages.getOrPartial(event.id);
+        if (!message) break;
+
+        let pinned: boolean | undefined;
+        if (typeof event.data.pinned === "boolean") pinned = event.data.pinned;
+        if (event.clear?.includes("Pinned")) pinned = false;
+        if (pinned === undefined) break;
+
+        const previousMessage = {
+          ...client.messages.getUnderlyingObject(event.id),
+          channelId: event.channel,
+        };
+        client.messages.updateUnderlyingObject(event.id, "pinned", pinned);
+        client.emit("messageUpdate", message, previousMessage);
+        break;
+      }
       const message = client.messages.getOrPartial(event.id);
       if (message) {
         const previousMessage = {
@@ -863,6 +947,8 @@ export async function handleEvent(
     }
     case "MessageAppend": {
       if (isEncryptedRow(client, event.id)) break;
+      // Server embeds never land on a protected row (plan D2)
+      if (isProtectedRowEvent(client, event.channel, event.id)) break;
       const message = client.messages.getOrPartial(event.id);
       if (message) {
         const previousMessage = {
@@ -992,6 +1078,12 @@ export async function handleEvent(
           client.emit("threadCreate", channel);
         }
       }
+      // One-way, cached or not (plan D1): a full object
+      client.applyProtectedFlag(
+        event._id,
+        (event as { protected?: unknown }).protected,
+        true,
+      );
       break;
     }
     case "ChannelUpdate": {
@@ -1002,6 +1094,9 @@ export async function handleEvent(
         };
 
         const changes = hydrate("channel", event.data, client, false);
+        // `protected` is one-way: never applied from the partial itself
+        // (an explicit false must not lower it); see applyProtectedFlag below
+        delete (changes as Partial<typeof changes>).protected;
 
         if (event.clear) {
           for (const remove of event.clear) {
@@ -1025,7 +1120,21 @@ export async function handleEvent(
         }
 
         client.channels.updateUnderlyingObject(event.id, changes);
+        // A partial: absent changes nothing, true sets and pins, an explicit
+        // false on a protected channel is reported as stripped (plan D1)
+        client.applyProtectedFlag(
+          event.id,
+          (event.data as { protected?: unknown }).protected,
+          false,
+        );
         client.emit("channelUpdate", channel, previousChannel);
+      } else {
+        // Not cached: still pin a channel the server reports protected
+        client.applyProtectedFlag(
+          event.id,
+          (event.data as { protected?: unknown }).protected,
+          false,
+        );
       }
       break;
     }
@@ -1157,15 +1266,26 @@ export async function handleEvent(
       break;
     }
     case "ServerCreate": {
-      if (!client.servers.has(event.server._id)) {
-        batch(() => {
+      batch(() => {
+        if (!client.servers.has(event.server._id)) {
           for (const channel of event.channels) {
             client.channels.getOrCreate(channel._id, channel);
           }
 
           client.servers.getOrCreate(event.server._id, event.server, true);
-        });
-      }
+        }
+
+        // One-way, cached or not (plan D1): full channel objects. Applied
+        // for an already-cached server too, since an invite or discovery
+        // join caches the server from its response before this event lands
+        for (const channel of event.channels) {
+          client.applyProtectedFlag(
+            channel._id,
+            (channel as { protected?: unknown }).protected,
+            true,
+          );
+        }
+      });
       break;
     }
     case "ServerUpdate": {
@@ -1772,6 +1892,13 @@ export async function handleEvent(
       // identities) are never broadcast. Only meaningful if the carrying
       // message is cached; a cold render re-hydrates via fetchPoll instead.
       const message = client.messages.getOrPartial(event.message_id);
+      // A protected row carries no poll; its state is never stamped (D25)
+      if (
+        message &&
+        isProtectedRowEvent(client, message.channelId, event.message_id)
+      ) {
+        break;
+      }
       if (message && message.poll?.id === event.id) {
         const current = client.messages.getUnderlyingObject(
           event.message_id,
@@ -1802,6 +1929,13 @@ export async function handleEvent(
       // carrying message is cached; a cold render re-hydrates via the
       // bulk softres fetch instead.
       const message = client.messages.getOrPartial(event.message_id);
+      // A protected row carries no sheet; its state is never stamped (D25)
+      if (
+        message &&
+        isProtectedRowEvent(client, message.channelId, event.message_id)
+      ) {
+        break;
+      }
       if (message && message.softres?.id === event.id) {
         const current = client.messages.getUnderlyingObject(
           event.message_id,
@@ -1886,6 +2020,13 @@ export async function handleEvent(
       // public-gated model (incl. the fresh definition — the message-
       // embedded copy stays stale by design).
       const message = client.messages.getOrPartial(event.message_id);
+      // A protected row carries no sheet; its state is never stamped (D25)
+      if (
+        message &&
+        isProtectedRowEvent(client, message.channelId, event.message_id)
+      ) {
+        break;
+      }
       if (message && message.softres?.id === event.id) {
         const current = client.messages.getUnderlyingObject(
           event.message_id,

@@ -26,13 +26,16 @@ export class ServerCollection extends ClassCollection<Server, HydratedServer> {
     });
 
     return batch(() => {
-      for (const channel of data.channels as unknown as Channel[]) {
-        if (typeof channel !== "string") {
-          this.client.channels.getOrCreate(channel._id, channel);
-        }
+      const channels = (data.channels as unknown as Channel[]).filter(
+        (channel) => typeof channel !== "string",
+      );
+      for (const channel of channels) {
+        this.client.channels.getOrCreate(channel._id, channel);
       }
 
-      return this.getOrCreate(data._id, data);
+      const server = this.getOrCreate(data._id, data);
+      this.#applyProtectedFlags(channels);
+      return server;
     });
   }
 
@@ -86,7 +89,25 @@ export class ServerCollection extends ClassCollection<Server, HydratedServer> {
         this.client.channels.getOrCreate(channel._id, channel);
       }
 
-      return this.getOrCreate(server._id, server, true);
+      const created = this.getOrCreate(server._id, server, true);
+      this.#applyProtectedFlags(channels);
+      return created;
     });
+  }
+
+  /**
+   * Apply each full channel object's `protected` field one-way, as Ready and
+   * ChannelCreate do (plan D1): `true` pins and notifies; a pinned channel
+   * without it is reported as stripped.
+   * @param channels Full channel objects from the response
+   */
+  #applyProtectedFlags(channels: { _id: string }[]): void {
+    for (const channel of channels) {
+      this.client.applyProtectedFlag(
+        channel._id,
+        (channel as { protected?: unknown }).protected,
+        true,
+      );
+    }
   }
 }
