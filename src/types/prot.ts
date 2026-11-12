@@ -460,7 +460,8 @@ export type ProtStoreVerifyResponse = {
     | "refunded"
     | "unknown_product"
     | "wrong_account"
-    | "no_buyer";
+    | "no_buyer"
+    | "over_cap";
   /** Store purchase id (`apple:prod:...` / `play:...`), whenever a row exists */
   purchase_id?: string;
   /** Wallet balance after a credit (credited / already_credited) */

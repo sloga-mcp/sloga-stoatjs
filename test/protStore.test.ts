@@ -394,8 +394,14 @@ test("a verify answer carries only the keys the server sent", () => {
   };
   const pending = { status: "pending", purchase_id: "play:" + "cd".repeat(32) };
   const bare = { status: "pending" };
+  // Held for staff review: crediting it would take the wallet over its cap
+  const overCap = {
+    status: "pending",
+    reason: "over_cap",
+    purchase_id: "apple:prod:2000000123456790",
+  };
 
-  for (const answer of [credited, already, pending, bare]) {
+  for (const answer of [credited, already, pending, bare, overCap]) {
     assert.deepEqual(typeErrors(typed("ProtStoreVerifyResponse", answer)), []);
     assert.deepEqual(roundTrip(answer), answer);
   }
@@ -415,6 +421,27 @@ test("a verify answer carries only the keys the server sent", () => {
       [],
     );
   }
+
+  // The reason union is exactly these: a reason missing from the literal
+  // fails with TS2741, one the union lacks with TS2353
+  assert.deepEqual(
+    typeErrors(
+      "type Reason = NonNullable<P.ProtStoreVerifyResponse['reason']>;\n" +
+        "const reasons: Record<Reason, true> = { test: true, unbound: true, " +
+        "refunded: true, unknown_product: true, wrong_account: true, " +
+        "no_buyer: true, over_cap: true };",
+    ),
+    [],
+  );
+  assert.deepEqual(
+    errorCodes(
+      typed("ProtStoreVerifyResponse", {
+        status: "pending",
+        reason: "overCap",
+      }),
+    ),
+    ["TS2820"],
+  );
 
   assert.deepEqual(
     errorCodes(typed("ProtStoreVerifyResponse", { status: "failed" })),
