@@ -2216,7 +2216,11 @@ export async function handleEvent(
     case "MlsJoinRequested":
     case "MlsCommit":
     case "MlsWelcome":
-    case "MlsCtl": {
+    case "MlsCtl":
+    // Protected channels (S2, design 7.5): a seats / Text group change hint
+    // on the channel topic. Same relay; no adapter = no-op. A refetch
+    // trigger only, never a security input.
+    case "ProtectedChannelChanged": {
       // Forwarded verbatim to the native-layer bridge; ciphertext and key
       // material are opaque to this library. No adapter (web) = no-op —
       // envelopes stay queued server-side for the user's real devices.

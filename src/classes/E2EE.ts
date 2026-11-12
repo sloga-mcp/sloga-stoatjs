@@ -39,6 +39,30 @@ export type E2EEEnvelope = {
   removed?: E2EEMemberDevice[];
   /** Rejoin intents the commit honours (absent = none) */
   rejoin_intents?: E2EERejoinIntent[];
+  /**
+   * The server's advisory reason for each removed device (S2, Text commits
+   * only; absent = none). Passed through as received: native decides.
+   */
+  removed_reasons?: E2EERemovedReason[];
+};
+
+/**
+ * The server's advisory reason for one device a Text commit removed. The
+ * server is untrusted here; an unknown `reason` is passed through and the
+ * native layer maps it to its own `Unknown`.
+ */
+export type E2EERemovedReason = {
+  user_id: string;
+  device_id: string;
+  reason:
+    | "own_user"
+    | "pending_removal"
+    | "off_list"
+    | "revoked"
+    | "rejoin"
+    | "pending_device"
+    | "idle"
+    | (string & {});
 };
 
 /**
@@ -59,6 +83,10 @@ export type E2EERejoinIntent = {
   device_id: string;
   key_package_ref: string;
   signature: string;
+  /** Text join payload only (S2, v2 lists): the signed generation */
+  generation?: number;
+  /** Text join payload only (S2, v2 lists): the signed issue time (ms) */
+  issued_at?: number;
 };
 
 /**
@@ -101,13 +129,24 @@ export type E2EEServerEvent =
        * so the device's next normal intent can be admitted. Optional — an
        * older server never sends it. */
       rejoin?: boolean;
+      /** Text join payload only (S2, v2 lists): the signed generation.
+       * Absent on Call intents and S1 intents. */
+      generation?: number;
+      /** Text join payload only (S2, v2 lists): the signed issue time
+       * (ms). Absent on Call intents and S1 intents. */
+      issued_at?: number;
     }
   | ({ type: "MlsCommit" } & E2EEEnvelope)
   | ({ type: "MlsWelcome" } & E2EEEnvelope)
   // An MLS application-message envelope (the §3.4 downgrade ctl-announce,
   // slice 6.5). Same ULID-dedup contract as MlsCommit but NO epoch
   // ordering — a ctl must never park the per-group drain.
-  | ({ type: "MlsCtl" } & E2EEEnvelope);
+  | ({ type: "MlsCtl" } & E2EEEnvelope)
+  // Protected channels (S2, design 7.5): a protected channel's seats or
+  // Text group changed. Published on the channel topic with no user ids.
+  // `scope` names what to refetch: `seats` | `text_group`; the client
+  // ignores unknown items. A refetch hint only, never a security input.
+  | { type: "ProtectedChannelChanged"; id: string; scope: string[] };
 
 /**
  * Client messages the adapter may send over the events connection.
