@@ -2031,7 +2031,19 @@ export class Channel {
    *   `AlreadyConnected` instead of force-disconnecting a live seat in another
    *   channel, so a stale sibling's rejoin cannot kick a seat that was moved
    *   meanwhile. Omitted or false sends no `rejoin` key (today's behavior).
+   * @param opts Ring signals. A key is sent only when its value is exactly
+   *   `true`. False or omitted sends no key, so a join without `opts` has the
+   *   same body as before.
+   * @param opts.answer This join is the user pressing Answer on a ring. The
+   *   server refuses with `CallEnded` instead of starting a new call when
+   *   nobody else is in it. It must only be sent by an Answer action, never by
+   *   an automatic rejoin: when `rejoin` is true the key is not sent at all.
+   * @param opts.video The caller pressed the video button. Only a hint shown
+   *   on the callee's ring, it grants nothing.
    * @returns LiveKit URL and Token
+   * @throws The raw response body as a string, such as
+   *   `'{"type":"CallEnded"}'`, when the server refuses. It is not parsed:
+   *   read its `type` after `JSON.parse`, never as `error.type`.
    */
   async joinCall(
     node?: string,
@@ -2039,6 +2051,7 @@ export class Channel {
     recipients?: (User | string)[],
     deviceId?: string,
     rejoin?: boolean,
+    opts?: { answer?: boolean; video?: boolean },
   ) {
     const body = {
       node,
@@ -2049,15 +2062,34 @@ export class Channel {
     };
     return await this.#collection.client.api.post(
       `/channels/${this.id as ""}/join_call`,
-      // `device_id` and `rejoin` are carried at runtime by the generic body
-      // mapper for this known route; stoat-api 0.13.5's `DataJoinCall` type
-      // predates both fields, so cast back to the pre-field body type to
-      // satisfy the compiler.
+      // `device_id`, `rejoin`, `answer` and `video` are carried at runtime by
+      // the generic body mapper for this known route; stoat-api 0.13.5's
+      // `DataJoinCall` type predates all four fields, so cast back to the
+      // pre-field body type to satisfy the compiler.
       {
         ...(deviceId ? { ...body, device_id: deviceId } : body),
         ...(rejoin ? { rejoin: true } : {}),
+        // An automatic rejoin is never an Answer, whatever the caller kept
+        // in its options.
+        ...(opts?.answer === true && !rejoin ? { answer: true } : {}),
+        ...(opts?.video === true ? { video: true } : {}),
       } as typeof body,
     );
+  }
+
+  /**
+   * Decline a ringing call in this DM or group. The server ignores it
+   * (`NoEffect`) when the ring is over, when you are the caller, or when you
+   * are already in the call.
+   * @throws The server's typed error object, such as `{ type: "NoEffect" }`
+   *   when there was nothing to decline, or the raw response text when the
+   *   body is not JSON. `NoEffect` means the ring is already over, so a
+   *   caller can treat it as a finished decline.
+   */
+  async declineCall(): Promise<void> {
+    // `apiReq`, not the typed client: `decline_call` is absent from stoat-api
+    // 0.13.5's route table.
+    await this.#collection.apiReq("PUT", `/channels/${this.id}/decline_call`);
   }
 
   /**

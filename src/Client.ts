@@ -95,6 +95,14 @@ export type ClientConfiguration = RevoltConfig & {
      * predate it
      */
     ios_call_e2ee?: boolean;
+
+    livekit: RevoltConfig["features"]["livekit"] & {
+      /**
+       * How long a call rings, in seconds, on every device; absent on
+       * servers that predate it
+       */
+      call_ring_duration?: number;
+    };
     // Typing only: the client reads this from `GET /` itself.
     e2ee?: { split_from?: boolean };
   };
@@ -315,6 +323,19 @@ export type Events = {
 
   voiceChannelJoin: [channel: Channel, userId: string];
   voiceChannelLeave: [channel: Channel, userId: string];
+
+  /**
+   * `userId` declined the ringing call `callId` in `channel`.
+   *
+   * For the signed-in user's own id it means "stop ringing on this device":
+   * they declined on one of their sessions, and every session is told. For
+   * the other person in a direct message it means "your call was declined".
+   *
+   * It can fire more than once for the same decline, and it also reaches the
+   * session that declined, so a listener must be safe to run twice. No other
+   * event carries a call id; match on the channel when none is known.
+   */
+  voiceCallDeclined: [channel: Channel, userId: string, callId: string];
 
   /**
    * A user was moved into `channel` from another voice channel
