@@ -90,6 +90,12 @@ export type ConfigLimits = LimitsConfig & {
 export type ClientConfiguration = RevoltConfig & {
   features: RevoltConfig["features"] & {
     limits: ConfigLimits;
+
+    /**
+     * Server kill switch for encrypted calls on iOS; absent on servers that
+     * predate it
+     */
+    ios_call_e2ee?: boolean;
     // Typing only: the client reads this from `GET /` itself.
     e2ee?: { split_from?: boolean };
   };
