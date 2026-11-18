@@ -533,6 +533,17 @@ type ServerMessage =
   | { type: "DiscordImportFailed"; job_id: string; error: string }
   | { type: "ProtBalanceUpdate"; balance: number; version: number }
   | { type: "ProtTankUpdate"; channel: string; tank?: ProtTankSummary }
+  | {
+      /**
+       * A user declined a ringing call. Sent privately to the user who
+       * declined, so their other sessions stop ringing. In a direct message
+       * it is also sent to the channel, so the caller can show the decline.
+       */
+      type: "VoiceCallDeclined";
+      channel_id: string;
+      call_id: string;
+      user_id: string;
+    }
   | E2EEServerEvent;
 
 /**
@@ -1660,6 +1671,22 @@ export async function handleEvent(
       if (channel) {
         channel.voiceParticipants.delete(event.user);
         client.emit("voiceChannelLeave", channel, event.user);
+      }
+      break;
+    }
+    case "VoiceCallDeclined": {
+      // A pure re-emit. Declining is not leaving: the user was never in the
+      // call, so the roster in `voiceParticipants` is left alone. Only a
+      // channel already in the cache is reported; a partial is never made
+      // for it.
+      const channel = client.channels.get(event.channel_id);
+      if (channel) {
+        client.emit(
+          "voiceCallDeclined" satisfies keyof Events,
+          channel,
+          event.user_id,
+          event.call_id,
+        );
       }
       break;
     }
