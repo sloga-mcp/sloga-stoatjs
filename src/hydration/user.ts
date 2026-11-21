@@ -40,9 +40,13 @@ export type UserConnection = {
  * session user, though editing another account as staff or as its bot owner
  * returns that account's value), `custom_badge` and `cipher` (public Cipher
  * membership, absent = none) are likewise newer than the published types.
+ * `e2ee_only` (the account only accepts encrypted direct messages and
+ * groups) is public and newer than the published types. Full objects omit
+ * it when false; an update that changes it carries an explicit boolean.
  */
 type APIUserExt = APIUser & {
   e2ee_enabled?: boolean;
+  e2ee_only?: boolean;
   connections?: UserConnection[];
   relationship_note?: string;
   profile_visibility?: ProfileVisibility;
@@ -70,6 +74,7 @@ export type HydratedUser = {
   online: boolean;
   privileged: boolean;
   e2eeEnabled: boolean;
+  e2eeOnly: boolean;
   profileVisibility: ProfileVisibility;
 
   badges: UserBadges;
@@ -93,6 +98,7 @@ export const userHydration: Hydrate<APIUserExt, HydratedUser> = {
     _id: "id",
     display_name: "displayName",
     e2ee_enabled: "e2eeEnabled",
+    e2ee_only: "e2eeOnly",
     relationship_note: "relationshipNote",
     profile_visibility: "profileVisibility",
     name_style: "nameStyle",
@@ -115,6 +121,9 @@ export const userHydration: Hydrate<APIUserExt, HydratedUser> = {
     privileged: (user) => user.privileged,
     // Serialized only when true (server skips false), so absence = false
     e2eeEnabled: (user) => user.e2ee_enabled ?? false,
+    // Only runs when the key is present: an update carrying an explicit
+    // false clears it, an update without the key keeps the known value
+    e2eeOnly: (user) => user.e2ee_only === true,
     // Only ever serialized on the session user's own object
     profileVisibility: (user) => user.profile_visibility ?? "Everyone",
 
@@ -146,6 +155,7 @@ export const userHydration: Hydrate<APIUserExt, HydratedUser> = {
   initialHydration: () => ({
     relationship: "None",
     e2eeEnabled: false,
+    e2eeOnly: false,
     profileVisibility: "Everyone",
     connections: [],
     // Skipped by the server when 0 and normally only sent for the session

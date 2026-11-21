@@ -716,7 +716,24 @@ export async function handleEvent(
       batch(() => {
         if (event.users) {
           for (const user of event.users) {
+            const known =
+              client.users.has(user._id) && !client.users.isPartial(user._id);
             const u = client.users.getOrCreate(user._id, user);
+
+            // A known user is kept as cached, so a setting changed while
+            // the socket was down would stay stale. Refresh this one field
+            // from the full object; an absent key means false.
+            if (known) {
+              const only =
+                (user as { e2ee_only?: unknown }).e2ee_only === true;
+              if (u.e2eeOnly !== only) {
+                client.users.updateUnderlyingObject(
+                  user._id,
+                  "e2eeOnly",
+                  only,
+                );
+              }
+            }
 
             if (u.relationship === "User") {
               client.user = u;
@@ -745,6 +762,11 @@ export async function handleEvent(
               channel._id,
               (channel as { protected?: unknown }).protected,
               true,
+            );
+            // One-way: `true` lands on an already-cached group too
+            client.applyE2eeOnlyFlag(
+              channel._id,
+              (channel as { e2ee_only?: unknown }).e2ee_only,
             );
             // Ready only ever includes threads the user has JOINED, so seed
             // self-membership — the wire shape carries no membership list.
@@ -1095,6 +1117,10 @@ export async function handleEvent(
         (event as { protected?: unknown }).protected,
         true,
       );
+      client.applyE2eeOnlyFlag(
+        event._id,
+        (event as { e2ee_only?: unknown }).e2ee_only,
+      );
       break;
     }
     case "ChannelUpdate": {
@@ -1108,6 +1134,8 @@ export async function handleEvent(
         // `protected` is one-way: never applied from the partial itself
         // (an explicit false must not lower it); see applyProtectedFlag below
         delete (changes as Partial<typeof changes>).protected;
+        // `e2eeOnly` is one-way too: see applyE2eeOnlyFlag below
+        delete (changes as Partial<typeof changes>).e2eeOnly;
 
         if (event.clear) {
           for (const remove of event.clear) {
@@ -1137,6 +1165,11 @@ export async function handleEvent(
           event.id,
           (event.data as { protected?: unknown }).protected,
           false,
+        );
+        // Absent or false changes nothing; true marks a cached group
+        client.applyE2eeOnlyFlag(
+          event.id,
+          (event.data as { e2ee_only?: unknown }).e2ee_only,
         );
         client.emit("channelUpdate", channel, previousChannel);
       } else {

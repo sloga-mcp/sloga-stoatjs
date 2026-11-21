@@ -147,6 +147,12 @@ export interface RespondToInteractionOptions {
    * with `components`.
    */
   ephemeral?: boolean;
+  /**
+   * Channel the interaction came from (`channel_id` of the event). When
+   * given and cached, the client's plain-write guard runs before the
+   * request.
+   */
+  channelId?: string;
 }
 
 /**
@@ -165,6 +171,11 @@ export async function respondToInteraction(
   content?: string,
   options?: RespondToInteractionOptions,
 ): Promise<unknown> {
+  const channel = options?.channelId
+    ? client.channels.get(options.channelId)
+    : undefined;
+  if (channel) client.plainWriteGuard?.(channel, "interaction");
+
   return await client.channels.apiReq(
     "POST",
     `/interactions/${interactionId}/respond`,
