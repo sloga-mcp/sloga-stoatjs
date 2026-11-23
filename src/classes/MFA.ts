@@ -1,30 +1,47 @@
 import type { SetStoreFunction } from "solid-js/store";
 import { createStore } from "solid-js/store";
 
-import type {
-  MFAMethod,
-  MFAResponse,
-  MultiFactorStatus,
-  MFATicket as TicketType,
-} from "stoat-api";
+import type { MFAResponse, MFATicket as TicketType } from "stoat-api";
 
 import type { Client } from "../Client.js";
+import { availableMfaMethods } from "../lib/mfaMethods.js";
+import type {
+  MFAStatus,
+  MFATicketMethod,
+  MFATicketResponse,
+} from "../types/passkeys.js";
 
 /**
  * Multi-Factor Authentication
  */
 export class MFA {
   #client: Client;
-  #store: [MultiFactorStatus, SetStoreFunction<MultiFactorStatus>];
+  #store: [MFAStatus, SetStoreFunction<MFAStatus>];
 
   /**
    * Construct MFA helper
    * @param client Client
    * @param state State
    */
-  constructor(client: Client, state: MultiFactorStatus) {
+  constructor(client: Client, state: MFAStatus) {
     this.#client = client;
     this.#store = createStore(state);
+  }
+
+  /**
+   * Whether the account has at least one passkey; false on servers that
+   * predate passkeys
+   */
+  get passkeyEnabled(): boolean {
+    return this.#store[0].security_key_mfa === true;
+  }
+
+  /**
+   * Whether the account has no usable password; false on servers that
+   * predate passkeys
+   */
+  get passwordAbsent(): boolean {
+    return this.#store[0].password_absent === true;
   }
 
   /**
@@ -42,25 +59,34 @@ export class MFA {
   }
 
   /**
-   * Available MFA methods for generating tickets
+   * Available MFA methods for generating tickets, easiest first. Empty for
+   * an account with no usable password, no passkey and no authenticator.
    */
-  get availableMethods(): MFAMethod[] {
-    return this.authenticatorEnabled
-      ? this.recoveryEnabled
-        ? ["Totp", "Recovery"]
-        : ["Totp"]
-      : ["Password"];
+  get availableMethods(): MFATicketMethod[] {
+    const state = this.#store[0];
+    return availableMfaMethods({
+      totp_mfa: state.totp_mfa,
+      recovery_active: state.recovery_active,
+      security_key_mfa: state.security_key_mfa,
+      password_absent: state.password_absent,
+    });
   }
 
   /**
    * Create an MFA ticket
-   * @param params
+   * @param params Factor; for a passkey, the result of a ceremony started
+   * with `client.passkeys.assertStart`
    * @returns Token
    */
-  async createTicket(params: MFAResponse): Promise<MFATicket> {
+  async createTicket(params: MFATicketResponse): Promise<MFATicket> {
     return new MFATicket(
       this.#client,
-      await this.#client.api.put("/auth/mfa/ticket", params),
+      await this.#client.api.put(
+        "/auth/mfa/ticket",
+        // The route is in stoat-api's tables, so the body is sent as given;
+        // only its published type lacks the passkey factor.
+        params as MFAResponse,
+      ),
       this.#store[1],
     );
   }
@@ -81,7 +107,7 @@ export class MFA {
 export class MFATicket {
   #client: Client;
   #ticket: TicketType;
-  #mutate: SetStoreFunction<MultiFactorStatus>;
+  #mutate: SetStoreFunction<MFAStatus>;
   #used = false;
 
   /**
@@ -93,7 +119,7 @@ export class MFATicket {
   constructor(
     client: Client,
     ticket: TicketType,
-    mutate: SetStoreFunction<MultiFactorStatus>,
+    mutate: SetStoreFunction<MFAStatus>,
   ) {
     this.#client = client;
     this.#ticket = ticket;

@@ -65,6 +65,12 @@ import {
   RE_MENTIONS,
   RE_SPOILER,
 } from "./lib/regex.js";
+import type {
+  PasskeyChallenge,
+  PasskeyCredentialJSON,
+  PasskeyInfo,
+  PasskeyLoginResponse,
+} from "./types/passkeys.js";
 
 export type Session = { _id: string; token: string; user_id: string } | string;
 
@@ -704,6 +710,102 @@ export class Client extends AsyncEventEmitter<Events> {
   /** @internal Newest ProtBalanceUpdate version seen (0 = none); see events/v1.ts */
   protBalanceVersion = 0;
 
+  /**
+   * Passkeys of the signed-in account. Every call needs a session and
+   * rejects with the parsed API error body (see {@link Client.#apiReq}).
+   *
+   * The SDK never runs a WebAuthn ceremony: `options` go to the embedding
+   * app as the server sent them, and `credential` goes to the server as the
+   * app gave it. Sign-in with a passkey is {@link Client.passkeyLoginStart}.
+   */
+  readonly passkeys = {
+    /**
+     * Fetch the account's passkeys
+     * @returns Passkeys
+     */
+    list: async (): Promise<PasskeyInfo[]> =>
+      (await this.#apiReq("GET", "/auth/passkey")) as PasskeyInfo[],
+
+    /**
+     * Start adding a passkey. Run the ceremony with the returned options,
+     * then give its result to `registerFinish`.
+     * @param ticket Valid MFA ticket token; leave out for an account with
+     * no usable password
+     * @returns Challenge id and WebAuthn creation options (JSON form)
+     */
+    registerStart: async (ticket?: string): Promise<PasskeyChallenge> =>
+      (await this.#apiReq(
+        "POST",
+        "/auth/passkey/register/start",
+        undefined,
+        ticket === undefined ? undefined : { "X-MFA-Ticket": ticket },
+      )) as PasskeyChallenge,
+
+    /**
+     * Finish adding a passkey
+     * @param challengeId Challenge id from `registerStart`
+     * @param credential Result of the ceremony (JSON form), sent as given
+     * @param name Name to show for the passkey
+     * @returns The new passkey
+     */
+    registerFinish: async (
+      challengeId: string,
+      credential: PasskeyCredentialJSON,
+      name?: string,
+    ): Promise<PasskeyInfo> =>
+      (await this.#apiReq("POST", "/auth/passkey/register/finish", {
+        challenge_id: challengeId,
+        credential,
+        name,
+      })) as PasskeyInfo,
+
+    /**
+     * Rename a passkey
+     * @param id Passkey id
+     * @param name New name
+     * @param ticket Valid MFA ticket token
+     * @returns The renamed passkey
+     */
+    rename: async (
+      id: string,
+      name: string,
+      ticket: string,
+    ): Promise<PasskeyInfo> =>
+      (await this.#apiReq(
+        "PATCH",
+        `/auth/passkey/${encodeURIComponent(id)}`,
+        { name },
+        { "X-MFA-Ticket": ticket },
+      )) as PasskeyInfo,
+
+    /**
+     * Remove a passkey
+     * @param id Passkey id
+     * @param ticket Valid MFA ticket token
+     */
+    remove: async (id: string, ticket: string): Promise<void> => {
+      await this.#apiReq(
+        "DELETE",
+        `/auth/passkey/${encodeURIComponent(id)}`,
+        undefined,
+        { "X-MFA-Ticket": ticket },
+      );
+    },
+
+    /**
+     * Start a passkey ceremony to prove it is you. Run the ceremony with
+     * the returned options, then create an MFA ticket with
+     * `{ passkey_response: { challenge_id, credential } }`
+     * (see `MFA.createTicket`).
+     * @returns Challenge id and WebAuthn request options (JSON form)
+     */
+    assertStart: async (): Promise<PasskeyChallenge> =>
+      (await this.#apiReq(
+        "POST",
+        "/auth/passkey/assert/start",
+      )) as PasskeyChallenge,
+  };
+
   readonly ready: Accessor<boolean>;
   #setReady: Setter<boolean>;
 
@@ -1020,12 +1122,85 @@ export class Client extends AsyncEventEmitter<Events> {
   async login(details: DataLogin): Promise<void> {
     await this.#fetchConfiguration();
     const data = await this.api.post("/auth/session/login", details);
+    if (!this.#adoptLoginSession(data)) {
+      throw "MFA not implemented!";
+    }
+  }
+
+  /**
+   * Keep the session of a successful login reply, for password and passkey
+   * sign-in alike.
+   * @param data Login reply
+   * @returns Whether the reply was a session
+   */
+  #adoptLoginSession(
+    data:
+      | { result: "Success"; _id: string; token: string; user_id: string }
+      | { result: "MFA" | "Disabled" },
+  ): boolean {
     if (data.result === "Success") {
       this.#session = data;
       // TODO: return await this.connect();
-    } else {
-      throw "MFA not implemented!";
+      return true;
     }
+
+    return false;
+  }
+
+  /**
+   * Start a passkey sign-in. Needs no session. Run the ceremony with the
+   * returned options, then give its result to {@link passkeyLoginFinish}.
+   *
+   * Rejects with the parsed API error body.
+   * @returns Challenge id and WebAuthn request options (JSON form)
+   */
+  async passkeyLoginStart(): Promise<PasskeyChallenge> {
+    return (await this.#apiReq(
+      "POST",
+      "/auth/passkey/login/start",
+    )) as PasskeyChallenge;
+  }
+
+  /**
+   * Finish a passkey sign-in, creating a new session in the process.
+   *
+   * A session reply is kept exactly as {@link login} keeps one, and is also
+   * returned. A disabled account is returned, not thrown, and no session is
+   * kept. There is never an MFA step: any other reply throws.
+   *
+   * Rejects with the parsed API error body.
+   * @param challengeId Challenge id from {@link passkeyLoginStart}
+   * @param credential Result of the ceremony (JSON form), sent as given
+   * @param friendlyName Friendly name used for the session
+   * @returns The new session, or the disabled account
+   */
+  async passkeyLoginFinish(
+    challengeId: string,
+    credential: PasskeyCredentialJSON,
+    friendlyName?: string,
+  ): Promise<PasskeyLoginResponse> {
+    await this.#fetchConfiguration();
+    const data = (await this.#apiReq("POST", "/auth/passkey/login/finish", {
+      challenge_id: challengeId,
+      credential,
+      friendly_name: friendlyName,
+    })) as PasskeyLoginResponse | null;
+
+    if (
+      data?.result === "Success" &&
+      typeof data.token === "string" &&
+      typeof data._id === "string" &&
+      typeof data.user_id === "string"
+    ) {
+      this.#adoptLoginSession(data);
+      return data;
+    }
+
+    if (data?.result === "Disabled" && typeof data.user_id === "string") {
+      return data;
+    }
+
+    throw new Error("Unexpected reply from /auth/passkey/login/finish");
   }
 
   /**
