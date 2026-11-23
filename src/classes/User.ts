@@ -1,6 +1,11 @@
 import { batch } from "solid-js";
 
-import type { User as APIUser, DataEditUser, Presence } from "stoat-api";
+import type {
+  User as APIUser,
+  DataChangeUsername,
+  DataEditUser,
+  Presence,
+} from "stoat-api";
 import { decodeTime } from "ulid";
 
 import type { UserCollection } from "../collections/UserCollection.js";
@@ -369,13 +374,26 @@ export class User {
   /**
    * Change the username of the current user
    * @param username New username
-   * @param password Current password
+   * @param password Current password; leave out for an account with no
+   * password, which gives a ticket instead
+   * @param ticket Valid MFA ticket token
    */
-  async changeUsername(username: string, password: string): Promise<APIUser> {
-    return await this.#collection.client.api.patch("/users/@me/username", {
-      username,
-      password,
-    });
+  async changeUsername(
+    username: string,
+    password?: string,
+    ticket?: string,
+  ): Promise<APIUser> {
+    return await this.#collection.client.api.patch(
+      "/users/@me/username",
+      // The server accepts password missing; the published type does not
+      {
+        username,
+        ...(password === undefined ? {} : { password }),
+      } as DataChangeUsername,
+      ticket === undefined
+        ? undefined
+        : { headers: { "X-MFA-Ticket": ticket } },
+    );
   }
 
   /**

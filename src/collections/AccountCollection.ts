@@ -1,4 +1,9 @@
-import type { DataCreateAccount, WebPushSubscription } from "stoat-api";
+import type {
+  DataChangeEmail,
+  DataChangePassword,
+  DataCreateAccount,
+  WebPushSubscription,
+} from "stoat-api";
 
 import type { Client } from "../Client.js";
 import { MFA } from "../classes/MFA.js";
@@ -98,25 +103,55 @@ export class AccountCollection {
   /**
    * Change account password
    * @param newPassword New password
-   * @param currentPassword Current password
+   * @param currentPassword Current password; leave out for an account with
+   * no password, which gives a ticket instead
+   * @param ticket Valid MFA ticket token
    */
-  changePassword(newPassword: string, currentPassword: string): Promise<void> {
-    return this.client.api.patch("/auth/account/change/password", {
-      password: newPassword,
-      current_password: currentPassword,
-    });
+  changePassword(
+    newPassword: string,
+    currentPassword?: string,
+    ticket?: string,
+  ): Promise<void> {
+    return this.client.api.patch(
+      "/auth/account/change/password",
+      // The server accepts current_password missing; the published type does not
+      {
+        password: newPassword,
+        ...(currentPassword === undefined
+          ? {}
+          : { current_password: currentPassword }),
+      } as DataChangePassword,
+      ticket === undefined
+        ? undefined
+        : { headers: { "X-MFA-Ticket": ticket } },
+    );
   }
 
   /**
    * Change account email
    * @param newEmail New email
-   * @param currentPassword Current password
+   * @param currentPassword Current password; leave out for an account with
+   * no password, which gives a ticket instead
+   * @param ticket Valid MFA ticket token
    */
-  changeEmail(newEmail: string, currentPassword: string): Promise<void> {
-    return this.client.api.patch("/auth/account/change/email", {
-      email: newEmail,
-      current_password: currentPassword,
-    });
+  changeEmail(
+    newEmail: string,
+    currentPassword?: string,
+    ticket?: string,
+  ): Promise<void> {
+    return this.client.api.patch(
+      "/auth/account/change/email",
+      // The server accepts current_password missing; the published type does not
+      {
+        email: newEmail,
+        ...(currentPassword === undefined
+          ? {}
+          : { current_password: currentPassword }),
+      } as DataChangeEmail,
+      ticket === undefined
+        ? undefined
+        : { headers: { "X-MFA-Ticket": ticket } },
+    );
   }
 
   /**

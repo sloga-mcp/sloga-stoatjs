@@ -728,17 +728,14 @@ export class Client extends AsyncEventEmitter<Events> {
 
     /**
      * Start adding a passkey. Run the ceremony with the returned options,
-     * then give its result to `registerFinish`.
-     * @param ticket Valid MFA ticket token; leave out for an account with
-     * no usable password
+     * then give its result to `registerFinish`. Takes no MFA ticket: the
+     * ticket goes with `registerFinish`.
      * @returns Challenge id and WebAuthn creation options (JSON form)
      */
-    registerStart: async (ticket?: string): Promise<PasskeyChallenge> =>
+    registerStart: async (): Promise<PasskeyChallenge> =>
       (await this.#apiReq(
         "POST",
         "/auth/passkey/register/start",
-        undefined,
-        ticket === undefined ? undefined : { "X-MFA-Ticket": ticket },
       )) as PasskeyChallenge,
 
     /**
@@ -746,37 +743,38 @@ export class Client extends AsyncEventEmitter<Events> {
      * @param challengeId Challenge id from `registerStart`
      * @param credential Result of the ceremony (JSON form), sent as given
      * @param name Name to show for the passkey
+     * @param ticket Valid MFA ticket token. The server lets a first passkey
+     * through without one in a narrow case; otherwise leaving it out
+     * rejects with `NotPrivileged`.
      * @returns The new passkey
      */
     registerFinish: async (
       challengeId: string,
       credential: PasskeyCredentialJSON,
       name?: string,
-    ): Promise<PasskeyInfo> =>
-      (await this.#apiReq("POST", "/auth/passkey/register/finish", {
-        challenge_id: challengeId,
-        credential,
-        name,
-      })) as PasskeyInfo,
-
-    /**
-     * Rename a passkey
-     * @param id Passkey id
-     * @param name New name
-     * @param ticket Valid MFA ticket token
-     * @returns The renamed passkey
-     */
-    rename: async (
-      id: string,
-      name: string,
-      ticket: string,
+      ticket?: string,
     ): Promise<PasskeyInfo> =>
       (await this.#apiReq(
-        "PATCH",
-        `/auth/passkey/${encodeURIComponent(id)}`,
-        { name },
-        { "X-MFA-Ticket": ticket },
+        "POST",
+        "/auth/passkey/register/finish",
+        {
+          challenge_id: challengeId,
+          credential,
+          name,
+        },
+        ticket === undefined ? undefined : { "X-MFA-Ticket": ticket },
       )) as PasskeyInfo,
+
+    /**
+     * Rename a passkey. Takes no MFA ticket.
+     * @param id Passkey id
+     * @param name New name
+     * @returns The renamed passkey
+     */
+    rename: async (id: string, name: string): Promise<PasskeyInfo> =>
+      (await this.#apiReq("PATCH", `/auth/passkey/${encodeURIComponent(id)}`, {
+        name,
+      })) as PasskeyInfo,
 
     /**
      * Remove a passkey

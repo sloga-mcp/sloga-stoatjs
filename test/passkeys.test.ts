@@ -9,7 +9,12 @@
  * - `client.passkeys.*` go through the raw-fetch helper (the routes are newer
  *   than the generated `stoat-api` tables, whose typed client would send an
  *   empty `{}` body): each case checks the method, the path, the exact body
- *   and the `X-MFA-Ticket` header, present or absent.
+ *   and the `X-MFA-Ticket` header, present or absent. The ticket goes with
+ *   `registerFinish` (optional) and `remove`; `registerStart` and `rename`
+ *   never send one.
+ * - `account.changeEmail`, `account.changePassword` and `user.changeUsername`
+ *   send what they always sent when given a password, and for an account
+ *   with no password leave the password key out and send the ticket header.
  * - `passkeyLoginFinish` keeps a session the way `login` does, returns a
  *   disabled account without keeping one, and throws on any other reply.
  * - `options` and `credential` cross the SDK untouched, key for key.
@@ -165,9 +170,10 @@ test("explicit false passkey fields change nothing", async () => {
     await loadSrc<MethodsModule>("lib/mfaMethods.ts");
   const off = { security_key_mfa: false, password_absent: false };
 
-  assert.deepEqual(availableMfaMethods({ ...oldStatus(false, false), ...off }), [
-    "Password",
-  ]);
+  assert.deepEqual(
+    availableMfaMethods({ ...oldStatus(false, false), ...off }),
+    ["Password"],
+  );
   assert.deepEqual(availableMfaMethods({ ...oldStatus(true, true), ...off }), [
     "Totp",
     "Recovery",
@@ -214,13 +220,14 @@ test("security_key_mfa with password_absent leaves Passkey alone, or first", asy
     await loadSrc<MethodsModule>("lib/mfaMethods.ts");
   const both = { security_key_mfa: true, password_absent: true };
 
-  assert.deepEqual(availableMfaMethods({ ...oldStatus(false, false), ...both }), [
-    "Passkey",
-  ]);
-  assert.deepEqual(availableMfaMethods({ ...oldStatus(true, false), ...both }), [
-    "Passkey",
-    "Totp",
-  ]);
+  assert.deepEqual(
+    availableMfaMethods({ ...oldStatus(false, false), ...both }),
+    ["Passkey"],
+  );
+  assert.deepEqual(
+    availableMfaMethods({ ...oldStatus(true, false), ...both }),
+    ["Passkey", "Totp"],
+  );
 });
 
 test("a non-boolean passkey field is not read as set", async () => {
@@ -327,33 +334,64 @@ test("passkeys.list GETs /auth/passkey with the session and no body", async () =
   assert.equal(calls[0].headers["x-mfa-ticket"], undefined);
 });
 
-test("passkeys.registerStart sends the ticket header when given one", async () => {
+test("passkeys.registerStart POSTs with the session, no body and no ticket header", async () => {
   const calls = stubFetch(200, { challenge_id: CHALLENGE, options: OPTIONS });
   const client = makeSessionClient();
 
-  const result = await client.passkeys.registerStart("ticket-token");
+  const result = await client.passkeys.registerStart();
 
   assert.deepEqual(result, { challenge_id: CHALLENGE, options: OPTIONS });
   assert.equal(calls.length, 1);
   assert.equal(calls[0].method, "POST");
   assert.equal(calls[0].url, `${BASE}/auth/passkey/register/start`);
   assert.equal(calls[0].body, undefined);
-  assert.equal(calls[0].headers["x-mfa-ticket"], "ticket-token");
-  assert.equal(calls[0].headers["x-session-token"], "tok");
-});
-
-test("passkeys.registerStart leaves the ticket header out without one", async () => {
-  const calls = stubFetch(200, { challenge_id: CHALLENGE, options: OPTIONS });
-  const client = makeSessionClient();
-
-  await client.passkeys.registerStart();
-
-  assert.equal(calls.length, 1);
   assert.equal("x-mfa-ticket" in calls[0].headers, false);
   assert.equal(calls[0].headers["x-session-token"], "tok");
 });
 
-test("passkeys.registerFinish POSTs the challenge, credential and name", async () => {
+test("passkeys.registerStart sends no ticket header even when handed one", async () => {
+  const calls = stubFetch(200, { challenge_id: CHALLENGE, options: OPTIONS });
+  const client = makeSessionClient();
+
+  // It takes no parameter; a caller written against the older signature
+  // must not get its ticket sent here (the server would ignore it).
+  await (
+    client.passkeys.registerStart as unknown as (
+      ticket: string,
+    ) => Promise<unknown>
+  )("ticket-token");
+
+  assert.equal(calls.length, 1);
+  assert.equal("x-mfa-ticket" in calls[0].headers, false);
+});
+
+test("passkeys.registerFinish sends the ticket header when given one", async () => {
+  const calls = stubFetch(200, INFO);
+  const client = makeSessionClient();
+
+  const result = await client.passkeys.registerFinish(
+    CHALLENGE,
+    CREDENTIAL,
+    "Phone",
+    "ticket-token",
+  );
+
+  assert.deepEqual(result, INFO);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].method, "POST");
+  assert.equal(calls[0].url, `${BASE}/auth/passkey/register/finish`);
+  assert.equal(calls[0].headers["content-type"], "application/json");
+  assert.equal(calls[0].headers["x-mfa-ticket"], "ticket-token");
+  assert.equal(calls[0].headers["x-session-token"], "tok");
+  // The ticket travels in the header only
+  assert.deepEqual(JSON.parse(calls[0].body ?? "null"), {
+    challenge_id: CHALLENGE,
+    credential: CREDENTIAL,
+    name: "Phone",
+  });
+});
+
+test("passkeys.registerFinish leaves the ticket header out without one", async () => {
   const calls = stubFetch(200, INFO);
   const client = makeSessionClient();
 
@@ -367,7 +405,8 @@ test("passkeys.registerFinish POSTs the challenge, credential and name", async (
   assert.equal(calls.length, 1);
   assert.equal(calls[0].method, "POST");
   assert.equal(calls[0].url, `${BASE}/auth/passkey/register/finish`);
-  assert.equal(calls[0].headers["content-type"], "application/json");
+  assert.equal("x-mfa-ticket" in calls[0].headers, false);
+  assert.equal(calls[0].headers["x-session-token"], "tok");
   assert.deepEqual(JSON.parse(calls[0].body ?? "null"), {
     challenge_id: CHALLENGE,
     credential: CREDENTIAL,
@@ -385,19 +424,56 @@ test("passkeys.registerFinish leaves name out when not given", async () => {
     challenge_id: CHALLENGE,
     credential: CREDENTIAL,
   });
+  assert.equal("x-mfa-ticket" in calls[0].headers, false);
 });
 
-test("passkeys.rename PATCHes { name } with the ticket header", async () => {
+test("passkeys.registerFinish takes a ticket without a name", async () => {
+  const calls = stubFetch(200, INFO);
+  const client = makeSessionClient();
+
+  await client.passkeys.registerFinish(
+    CHALLENGE,
+    CREDENTIAL,
+    undefined,
+    "ticket-token",
+  );
+
+  assert.deepEqual(JSON.parse(calls[0].body ?? "null"), {
+    challenge_id: CHALLENGE,
+    credential: CREDENTIAL,
+  });
+  assert.equal(calls[0].headers["x-mfa-ticket"], "ticket-token");
+});
+
+test("passkeys.rename PATCHes { name } with no ticket header", async () => {
   const calls = stubFetch(200, { ...INFO, name: "Laptop" });
   const client = makeSessionClient();
 
-  const result = await client.passkeys.rename(PASSKEY, "Laptop", "ticket-token");
+  const result = await client.passkeys.rename(PASSKEY, "Laptop");
 
   assert.deepEqual(result, { ...INFO, name: "Laptop" });
   assert.equal(calls.length, 1);
   assert.equal(calls[0].method, "PATCH");
   assert.equal(calls[0].url, `${BASE}/auth/passkey/${PASSKEY}`);
-  assert.equal(calls[0].headers["x-mfa-ticket"], "ticket-token");
+  assert.equal("x-mfa-ticket" in calls[0].headers, false);
+  assert.equal(calls[0].headers["x-session-token"], "tok");
+  assert.deepEqual(JSON.parse(calls[0].body ?? "null"), { name: "Laptop" });
+});
+
+test("passkeys.rename sends no ticket header even when handed one", async () => {
+  const calls = stubFetch(200, { ...INFO, name: "Laptop" });
+  const client = makeSessionClient();
+
+  await (
+    client.passkeys.rename as unknown as (
+      id: string,
+      name: string,
+      ticket: string,
+    ) => Promise<unknown>
+  )(PASSKEY, "Laptop", "ticket-token");
+
+  assert.equal(calls.length, 1);
+  assert.equal("x-mfa-ticket" in calls[0].headers, false);
   assert.deepEqual(JSON.parse(calls[0].body ?? "null"), { name: "Laptop" });
 });
 
@@ -446,14 +522,180 @@ test("passkeys.* rethrow the parsed error body", async () => {
   const client = makeSessionClient();
 
   await assert.rejects(client.passkeys.list(), { type: "InvalidToken" });
-  await assert.rejects(client.passkeys.registerStart("bad"), {
+  await assert.rejects(client.passkeys.registerStart(), {
     type: "InvalidToken",
   });
-  await assert.rejects(client.passkeys.rename(PASSKEY, "x", "bad"), {
+  await assert.rejects(client.passkeys.rename(PASSKEY, "x"), {
     type: "InvalidToken",
   });
   await assert.rejects(client.passkeys.remove(PASSKEY, "bad"), {
     type: "InvalidToken",
+  });
+});
+
+test("passkeys.registerFinish without a ticket rethrows NotPrivileged", async () => {
+  stubFetch(403, { type: "NotPrivileged" });
+  const client = makeSessionClient();
+
+  await assert.rejects(client.passkeys.registerFinish(CHALLENGE, CREDENTIAL), {
+    type: "NotPrivileged",
+  });
+});
+
+// ---- account changes -------------------------------------------------------
+
+function makeUserClient() {
+  const client = makeSessionClient();
+  client.user = client.users.getOrCreate(USER, {
+    _id: USER,
+    username: "me",
+    discriminator: "0001",
+    relationship: "User",
+    online: true,
+  } as never);
+  return client;
+}
+
+test("account.changeEmail with a password sends what it always sent", async () => {
+  const calls = stubFetch(204);
+  const client = makeSessionClient();
+
+  await client.account.changeEmail("new@example.test", "hunter2");
+
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].method, "PATCH");
+  assert.equal(new URL(calls[0].url).pathname, "/auth/account/change/email");
+  assert.equal(new URL(calls[0].url).search, "");
+  assert.equal("x-mfa-ticket" in calls[0].headers, false);
+  assert.equal(calls[0].headers["x-session-token"], "tok");
+  assert.deepEqual(JSON.parse(calls[0].body ?? "null"), {
+    email: "new@example.test",
+    current_password: "hunter2",
+  });
+});
+
+test("account.changeEmail without a password leaves the key out and sends the ticket", async () => {
+  const calls = stubFetch(204);
+  const client = makeSessionClient();
+
+  await client.account.changeEmail(
+    "new@example.test",
+    undefined,
+    "ticket-token",
+  );
+
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].method, "PATCH");
+  assert.equal(new URL(calls[0].url).pathname, "/auth/account/change/email");
+  assert.equal(new URL(calls[0].url).search, "");
+  assert.equal(calls[0].headers["x-mfa-ticket"], "ticket-token");
+  assert.equal(calls[0].headers["x-session-token"], "tok");
+  const body = JSON.parse(calls[0].body ?? "null");
+  assert.equal("current_password" in body, false);
+  assert.deepEqual(body, { email: "new@example.test" });
+});
+
+test("account.changeEmail sends a password and a ticket together when given both", async () => {
+  const calls = stubFetch(204);
+  const client = makeSessionClient();
+
+  await client.account.changeEmail(
+    "new@example.test",
+    "hunter2",
+    "ticket-token",
+  );
+
+  assert.equal(calls[0].headers["x-mfa-ticket"], "ticket-token");
+  assert.deepEqual(JSON.parse(calls[0].body ?? "null"), {
+    email: "new@example.test",
+    current_password: "hunter2",
+  });
+});
+
+test("account.changePassword with a password sends what it always sent", async () => {
+  const calls = stubFetch(204);
+  const client = makeSessionClient();
+
+  await client.account.changePassword("correct horse", "hunter2");
+
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].method, "PATCH");
+  assert.equal(new URL(calls[0].url).pathname, "/auth/account/change/password");
+  assert.equal(new URL(calls[0].url).search, "");
+  assert.equal("x-mfa-ticket" in calls[0].headers, false);
+  assert.equal(calls[0].headers["x-session-token"], "tok");
+  assert.deepEqual(JSON.parse(calls[0].body ?? "null"), {
+    password: "correct horse",
+    current_password: "hunter2",
+  });
+});
+
+test("account.changePassword without a password leaves the key out and sends the ticket", async () => {
+  const calls = stubFetch(204);
+  const client = makeSessionClient();
+
+  await client.account.changePassword(
+    "correct horse",
+    undefined,
+    "ticket-token",
+  );
+
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].method, "PATCH");
+  assert.equal(new URL(calls[0].url).pathname, "/auth/account/change/password");
+  assert.equal(new URL(calls[0].url).search, "");
+  assert.equal(calls[0].headers["x-mfa-ticket"], "ticket-token");
+  assert.equal(calls[0].headers["x-session-token"], "tok");
+  const body = JSON.parse(calls[0].body ?? "null");
+  assert.equal("current_password" in body, false);
+  assert.deepEqual(body, { password: "correct horse" });
+});
+
+test("user.changeUsername with a password sends what it always sent", async () => {
+  const calls = stubFetch(200, { _id: USER, username: "renamed" });
+  const client = makeUserClient();
+
+  const result = await client.user!.changeUsername("renamed", "hunter2");
+
+  assert.deepEqual(result, { _id: USER, username: "renamed" });
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].method, "PATCH");
+  assert.equal(new URL(calls[0].url).pathname, "/users/@me/username");
+  assert.equal(new URL(calls[0].url).search, "");
+  assert.equal("x-mfa-ticket" in calls[0].headers, false);
+  assert.equal(calls[0].headers["x-session-token"], "tok");
+  assert.deepEqual(JSON.parse(calls[0].body ?? "null"), {
+    username: "renamed",
+    password: "hunter2",
+  });
+});
+
+test("user.changeUsername without a password leaves the key out and sends the ticket", async () => {
+  const calls = stubFetch(200, { _id: USER, username: "renamed" });
+  const client = makeUserClient();
+
+  await client.user!.changeUsername("renamed", undefined, "ticket-token");
+
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].method, "PATCH");
+  assert.equal(new URL(calls[0].url).pathname, "/users/@me/username");
+  assert.equal(new URL(calls[0].url).search, "");
+  assert.equal(calls[0].headers["x-mfa-ticket"], "ticket-token");
+  assert.equal(calls[0].headers["x-session-token"], "tok");
+  const body = JSON.parse(calls[0].body ?? "null");
+  assert.equal("password" in body, false);
+  assert.deepEqual(body, { username: "renamed" });
+});
+
+test("an empty password is still sent, not treated as missing", async () => {
+  const calls = stubFetch(204);
+  const client = makeSessionClient();
+
+  await client.account.changeEmail("new@example.test", "");
+
+  assert.deepEqual(JSON.parse(calls[0].body ?? "null"), {
+    email: "new@example.test",
+    current_password: "",
   });
 });
 
@@ -487,7 +729,11 @@ test("passkeyLoginFinish keeps and returns the session", async () => {
   const client = makeClient();
   assert.equal(client.sessionId, undefined);
 
-  const result = await client.passkeyLoginFinish(CHALLENGE, CREDENTIAL, "Phone");
+  const result = await client.passkeyLoginFinish(
+    CHALLENGE,
+    CREDENTIAL,
+    "Phone",
+  );
 
   assert.deepEqual(result, SUCCESS);
   assert.equal(calls.length, 1);
