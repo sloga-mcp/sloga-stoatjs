@@ -7,6 +7,7 @@ import type {
 
 import type { Client } from "../Client.js";
 import { MFA } from "../classes/MFA.js";
+import type { AccountInfo } from "../types/passkeys.js";
 
 /**
  * Utility functions for working with accounts
@@ -28,6 +29,71 @@ export class AccountCollection {
    */
   async fetchEmail(): Promise<string> {
     return (await this.client.api.get("/auth/account/")).email;
+  }
+
+  /**
+   * Fetch current account id, email, and whether it has an email at all.
+   *
+   * An account created with a passkey may have none: `email` is then `""`
+   * and `email_absent` is true. Such an account gets its first address with
+   * {@link addEmailStart}, cannot use {@link changePassword} until it has
+   * one, cannot recover a lost passkey, and deletes with a typed username
+   * (see `MFATicket.deleteAccount`).
+   * @returns Account info; `email_absent` is false when the server sent none
+   */
+  async fetchInfo(): Promise<AccountInfo> {
+    const info = (await this.client.api.get("/auth/account/")) as {
+      _id: string;
+      email: string;
+      email_absent?: unknown;
+    };
+
+    // Only a plain true says so
+    return { ...info, email_absent: info.email_absent === true };
+  }
+
+  /**
+   * Start giving an account that has no email its first address: an
+   * 8-digit code is mailed to it, to be typed into the app and given to
+   * {@link addEmailFinish}. There is no link to click. The code lasts 15
+   * minutes.
+   *
+   * Resolves (204) whether or not a code was sent: an address that already
+   * has an account gets a notice instead of a code, a second request within
+   * a minute sends nothing, and neither does a request for an address that
+   * was mailed too often lately. Never treat this call resolving as proof a
+   * code went out.
+   *
+   * Rejects with the parsed API error body: `FeatureDisabled` unless both
+   * passkeys and passkey sign-up are on (`features.passkeys.available` and
+   * `.signup`), `InvalidOperation` for an account that already has an email
+   * (that one uses {@link changeEmail}), `FailedValidation` or another
+   * email error for an address the server will not take.
+   * @param email Email address
+   * @param ticket Valid MFA ticket token
+   */
+  async addEmailStart(email: string, ticket: string): Promise<void> {
+    await this.#apiReq(
+      "POST",
+      "/auth/account/email/add/start",
+      { email },
+      { "X-MFA-Ticket": ticket },
+    );
+  }
+
+  /**
+   * Confirm the code {@link addEmailStart} mailed, from the same session.
+   * The address becomes the account's email. Takes no MFA ticket.
+   *
+   * A wrong, expired or used code, a code that ran out of tries (five), and
+   * an address that another account took meanwhile all reject with
+   * `InvalidCredentials`; they cannot be told apart. Rejects with
+   * `FeatureDisabled` unless both passkeys and passkey sign-up are on, and
+   * with `InvalidOperation` for an account that already has an email.
+   * @param code The code from the email
+   */
+  async addEmailFinish(code: string): Promise<void> {
+    await this.#apiReq("POST", "/auth/account/email/add/finish", { code });
   }
 
   /**
@@ -102,6 +168,11 @@ export class AccountCollection {
 
   /**
    * Change account password
+   *
+   * Rejects with `InvalidOperation` for an account that has no email: it
+   * adds an email first ({@link addEmailStart}). This call goes through
+   * `client.api`, which rejects with the error body as text (a JSON
+   * string), not a parsed object.
    * @param newPassword New password
    * @param currentPassword Current password; leave out for an account with
    * no password, which gives a ticket instead
@@ -129,10 +200,20 @@ export class AccountCollection {
 
   /**
    * Change account email
+   *
+   * Rejects with `InvalidOperation` for every account that has no
+   * password, with or without a ticket, and for every account that has no
+   * email. An account with no email uses {@link addEmailStart}; one with
+   * an email and no password sets a password first
+   * ({@link changePassword}). This call goes through `client.api`, which
+   * rejects with the error body as text (a JSON string), not a parsed
+   * object.
    * @param newEmail New email
-   * @param currentPassword Current password; leave out for an account with
-   * no password, which gives a ticket instead
-   * @param ticket Valid MFA ticket token
+   * @param currentPassword Current password. Required by the server: a
+   * ticket does not stand in for it (leaving it out rejects with
+   * `InvalidCredentials`).
+   * @param ticket Valid MFA ticket token, needed as well when the account
+   * has MFA on
    */
   changeEmail(
     newEmail: string,
@@ -195,5 +276,45 @@ export class AccountCollection {
    */
   webPushUnsubscribe(): Promise<void> {
     return this.client.api.post("/push/unsubscribe");
+  }
+
+  /**
+   * Raw request against a route missing from stoat-api's tables, whose
+   * typed client would send an empty `{}` body. Same as `Client.#apiReq`:
+   * on a non-2xx this throws the parsed JSON error body, not an `Error`.
+   */
+  async #apiReq(
+    method: string,
+    path: string,
+    body: unknown,
+    headers?: Record<string, string>,
+  ): Promise<unknown> {
+    const api = this.client.api as unknown as {
+      baseURL: string;
+      auth: Record<string, string>;
+    };
+
+    const response = await fetch(api.baseURL + path, {
+      method,
+      headers: {
+        ...api.auth,
+        "Content-Type": "application/json",
+        ...headers,
+      },
+      body: JSON.stringify(body),
+    });
+
+    if (!response.ok) {
+      const text = await response.text();
+      let error: unknown = text;
+      try {
+        error = JSON.parse(text);
+      } catch {
+        /* keep the raw text */
+      }
+      throw error;
+    }
+
+    return response.status === 204 ? null : response.json();
   }
 }

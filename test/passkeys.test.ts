@@ -18,6 +18,13 @@
  * - `passkeyLoginFinish` keeps a session the way `login` does, returns a
  *   disabled account without keeping one, and throws on any other reply.
  * - `options` and `credential` cross the SDK untouched, key for key.
+ * - `registerStart` reads `ticket_required` as false only for a plain false.
+ * - Sign-up (`passkeySignup*`) and recovery (`passkeyRecover*`): the path,
+ *   the exact body with absent optional keys left out, no ticket header;
+ *   the two finish steps keep a session the way `passkeyLoginFinish` does.
+ * - `account.addEmailStart` sends the ticket header, `addEmailFinish` none;
+ *   `account.fetchInfo` reads `email_absent` as true only for a plain true;
+ *   `MFATicket.deleteAccount` sends `{ username }` only when given one.
  *
  * Run from the package root:
  *
@@ -340,7 +347,12 @@ test("passkeys.registerStart POSTs with the session, no body and no ticket heade
 
   const result = await client.passkeys.registerStart();
 
-  assert.deepEqual(result, { challenge_id: CHALLENGE, options: OPTIONS });
+  // The answer of a server that predates `ticket_required` reads as true
+  assert.deepEqual(result, {
+    challenge_id: CHALLENGE,
+    options: OPTIONS,
+    ticket_required: true,
+  });
   assert.equal(calls.length, 1);
   assert.equal(calls[0].method, "POST");
   assert.equal(calls[0].url, `${BASE}/auth/passkey/register/start`);
@@ -808,6 +820,537 @@ test("passkeyLoginFinish rethrows the parsed error body", async () => {
     type: "InvalidCredentials",
   });
   assert.equal(client.sessionId, undefined);
+});
+
+// ---- register start: ticket_required ---------------------------------------
+
+test("passkeys.registerStart passes ticket_required false and true through", async () => {
+  const client = makeSessionClient();
+
+  for (const ticket_required of [false, true]) {
+    stubFetch(200, {
+      challenge_id: CHALLENGE,
+      options: OPTIONS,
+      ticket_required,
+    });
+
+    assert.deepEqual(await client.passkeys.registerStart(), {
+      challenge_id: CHALLENGE,
+      options: OPTIONS,
+      ticket_required,
+    });
+  }
+});
+
+test("passkeys.registerStart lifts the ticket only for a plain false", async () => {
+  const client = makeSessionClient();
+
+  for (const sent of [undefined, null, 0, "", "false"]) {
+    stubFetch(200, {
+      challenge_id: CHALLENGE,
+      options: OPTIONS,
+      ...(sent === undefined ? {} : { ticket_required: sent }),
+    });
+
+    const result = await client.passkeys.registerStart();
+    assert.equal(result.ticket_required, true, `sent ${JSON.stringify(sent)}`);
+    assert.deepEqual(result.options, OPTIONS);
+  }
+});
+
+// ---- sign-up ---------------------------------------------------------------
+
+const SIGNUP = "5f".repeat(32);
+
+test("passkeySignupStart sends only the keys it was given, with no session", async () => {
+  const calls = stubFetch(200, {
+    signup_id: SIGNUP,
+    email_code_required: false,
+  });
+  const client = makeClient();
+
+  const result = await client.passkeySignupStart({
+    username: "alice",
+    no_email_ack: true,
+  });
+
+  assert.deepEqual(result, { signup_id: SIGNUP, email_code_required: false });
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].method, "POST");
+  assert.equal(calls[0].url, `${BASE}/auth/passkey/signup/start`);
+  assert.equal(calls[0].headers["content-type"], "application/json");
+  assert.equal("x-session-token" in calls[0].headers, false);
+  assert.equal("x-mfa-ticket" in calls[0].headers, false);
+  assert.deepEqual(JSON.parse(calls[0].body ?? "null"), {
+    username: "alice",
+    no_email_ack: true,
+  });
+  // Starting a sign-up signs nobody in
+  assert.equal(client.sessionId, undefined);
+});
+
+test("passkeySignupStart sends every field under its wire name", async () => {
+  const calls = stubFetch(200, {
+    signup_id: SIGNUP,
+    email_code_required: true,
+  });
+
+  const result = await makeClient().passkeySignupStart({
+    username: "alice",
+    email: "alice@example.test",
+    no_email_ack: false,
+    invite: "account-invite",
+    referral_code: "REFER",
+    invite_code: "server-invite",
+    captcha: "captcha-answer",
+  });
+
+  assert.deepEqual(result, { signup_id: SIGNUP, email_code_required: true });
+  assert.deepEqual(JSON.parse(calls[0].body ?? "null"), {
+    username: "alice",
+    email: "alice@example.test",
+    no_email_ack: false,
+    invite: "account-invite",
+    referral_code: "REFER",
+    invite_code: "server-invite",
+    captcha: "captcha-answer",
+  });
+});
+
+test("passkeySignupStart sends nothing it was not asked to", async () => {
+  const calls = stubFetch(200, {
+    signup_id: SIGNUP,
+    email_code_required: true,
+  });
+
+  await makeClient().passkeySignupStart({
+    username: "alice",
+    email: "alice@example.test",
+    password: "hunter2",
+    email_confirmed: true,
+  } as never);
+
+  assert.deepEqual(JSON.parse(calls[0].body ?? "null"), {
+    username: "alice",
+    email: "alice@example.test",
+  });
+});
+
+test("passkeySignupCode POSTs { signup_id, code } and takes a 204", async () => {
+  const calls = stubFetch(204);
+
+  const result = await makeClient().passkeySignupCode(SIGNUP, "01234567");
+
+  assert.equal(result, undefined);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].method, "POST");
+  assert.equal(calls[0].url, `${BASE}/auth/passkey/signup/code`);
+  assert.equal("x-session-token" in calls[0].headers, false);
+  // The code stays a string: a leading zero is part of it
+  assert.deepEqual(JSON.parse(calls[0].body ?? "null"), {
+    signup_id: SIGNUP,
+    code: "01234567",
+  });
+});
+
+test("passkeySignupResend POSTs { signup_id } and takes a 204", async () => {
+  const calls = stubFetch(204);
+
+  const result = await makeClient().passkeySignupResend(SIGNUP);
+
+  assert.equal(result, undefined);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].method, "POST");
+  assert.equal(calls[0].url, `${BASE}/auth/passkey/signup/resend`);
+  assert.deepEqual(JSON.parse(calls[0].body ?? "null"), { signup_id: SIGNUP });
+});
+
+test("passkeySignupOptions POSTs { signup_id } and returns the challenge untouched", async () => {
+  const calls = stubFetch(200, { challenge_id: CHALLENGE, options: OPTIONS });
+
+  const result = await makeClient().passkeySignupOptions(SIGNUP);
+
+  assert.deepEqual(result, { challenge_id: CHALLENGE, options: OPTIONS });
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].method, "POST");
+  assert.equal(calls[0].url, `${BASE}/auth/passkey/signup/options`);
+  assert.equal("x-session-token" in calls[0].headers, false);
+  assert.deepEqual(JSON.parse(calls[0].body ?? "null"), { signup_id: SIGNUP });
+});
+
+test("passkeySignupFinish keeps and returns the session", async () => {
+  const calls = stubFetch(200, SUCCESS);
+  const client = makeClient();
+
+  const result = await client.passkeySignupFinish(
+    CHALLENGE,
+    CREDENTIAL,
+    "Phone",
+  );
+
+  assert.deepEqual(result, SUCCESS);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].method, "POST");
+  assert.equal(calls[0].url, `${BASE}/auth/passkey/signup/finish`);
+  assert.equal("x-session-token" in calls[0].headers, false);
+  // No sign-up id: the server takes it from the challenge
+  assert.deepEqual(JSON.parse(calls[0].body ?? "null"), {
+    challenge_id: CHALLENGE,
+    credential: CREDENTIAL,
+    friendly_name: "Phone",
+  });
+  assert.equal(client.sessionId, SESSION);
+  assert.deepEqual(client.authenticationHeader, [
+    "X-Session-Token",
+    "session-token",
+  ]);
+});
+
+test("passkeySignupFinish leaves friendly_name out when not given", async () => {
+  const calls = stubFetch(200, SUCCESS);
+
+  await makeClient().passkeySignupFinish(CHALLENGE, CREDENTIAL);
+
+  assert.deepEqual(JSON.parse(calls[0].body ?? "null"), {
+    challenge_id: CHALLENGE,
+    credential: CREDENTIAL,
+  });
+});
+
+test("passkeySignupFinish throws on any other reply and keeps no session", async () => {
+  const client = makeClient();
+
+  for (const reply of [
+    { result: "MFA", ticket: "t", allowed_methods: ["Totp"] },
+    { result: "Success", _id: SESSION, user_id: USER },
+    null,
+  ]) {
+    stubFetch(200, reply);
+    await assert.rejects(
+      client.passkeySignupFinish(CHALLENGE, CREDENTIAL),
+      /Unexpected reply from \/auth\/passkey\/signup\/finish/,
+    );
+    assert.equal(client.sessionId, undefined);
+  }
+});
+
+test("the sign-up steps rethrow the parsed error body and keep no session", async () => {
+  const client = makeClient();
+
+  stubFetch(400, { type: "FeatureDisabled", feature: "passkey_signup" });
+  await assert.rejects(client.passkeySignupStart({ username: "alice" }), {
+    type: "FeatureDisabled",
+    feature: "passkey_signup",
+  });
+
+  stubFetch(400, { type: "InvalidOperation" });
+  await assert.rejects(client.passkeySignupStart({ username: "alice" }), {
+    type: "InvalidOperation",
+  });
+
+  stubFetch(401, { type: "InvalidCredentials" });
+  await assert.rejects(client.passkeySignupCode(SIGNUP, "00000000"), {
+    type: "InvalidCredentials",
+  });
+  await assert.rejects(client.passkeySignupResend(SIGNUP), {
+    type: "InvalidCredentials",
+  });
+  await assert.rejects(client.passkeySignupOptions(SIGNUP), {
+    type: "InvalidCredentials",
+  });
+
+  stubFetch(409, { type: "UsernameTaken" });
+  await assert.rejects(client.passkeySignupFinish(CHALLENGE, CREDENTIAL), {
+    type: "UsernameTaken",
+  });
+  assert.equal(client.sessionId, undefined);
+});
+
+// ---- lost passkey ----------------------------------------------------------
+
+const LINK_TOKEN = "recovery-link-token";
+
+test("passkeyRecoverSend POSTs { email } with no session and takes a 204", async () => {
+  const calls = stubFetch(204);
+
+  const result = await makeClient().passkeyRecoverSend("alice@example.test");
+
+  assert.equal(result, undefined);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].method, "POST");
+  assert.equal(calls[0].url, `${BASE}/auth/passkey/recover/send`);
+  assert.equal("x-session-token" in calls[0].headers, false);
+  assert.deepEqual(JSON.parse(calls[0].body ?? "null"), {
+    email: "alice@example.test",
+  });
+});
+
+test("passkeyRecoverStart POSTs { token } and returns the answer untouched", async () => {
+  const answer = {
+    challenge_id: CHALLENGE,
+    options: OPTIONS,
+    second_factor_required: true,
+  };
+  const calls = stubFetch(200, answer);
+
+  const result = await makeClient().passkeyRecoverStart(LINK_TOKEN);
+
+  assert.deepEqual(result, answer);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].method, "POST");
+  assert.equal(calls[0].url, `${BASE}/auth/passkey/recover/start`);
+  assert.equal("x-session-token" in calls[0].headers, false);
+  // The token travels in the body, never in the URL
+  assert.deepEqual(JSON.parse(calls[0].body ?? "null"), { token: LINK_TOKEN });
+});
+
+test("passkeyRecoverFinish sends token, challenge_id and credential, and keeps the session", async () => {
+  const calls = stubFetch(200, SUCCESS);
+  const client = makeClient();
+
+  const result = await client.passkeyRecoverFinish(
+    LINK_TOKEN,
+    CHALLENGE,
+    CREDENTIAL,
+  );
+
+  assert.deepEqual(result, SUCCESS);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].method, "POST");
+  assert.equal(calls[0].url, `${BASE}/auth/passkey/recover/finish`);
+  assert.equal("x-session-token" in calls[0].headers, false);
+  assert.equal("x-mfa-ticket" in calls[0].headers, false);
+  const body = JSON.parse(calls[0].body ?? "null");
+  assert.equal("totp_code" in body, false);
+  assert.equal("recovery_code" in body, false);
+  assert.deepEqual(body, {
+    token: LINK_TOKEN,
+    challenge_id: CHALLENGE,
+    credential: CREDENTIAL,
+  });
+  assert.equal(client.sessionId, SESSION);
+});
+
+test("passkeyRecoverFinish sends the one second factor it was given", async () => {
+  const calls = stubFetch(200, SUCCESS);
+
+  await makeClient().passkeyRecoverFinish(LINK_TOKEN, CHALLENGE, CREDENTIAL, {
+    totp_code: "012345",
+  });
+  await makeClient().passkeyRecoverFinish(LINK_TOKEN, CHALLENGE, CREDENTIAL, {
+    recovery_code: "abcd-efgh",
+  });
+
+  assert.deepEqual(JSON.parse(calls[0].body ?? "null"), {
+    token: LINK_TOKEN,
+    challenge_id: CHALLENGE,
+    credential: CREDENTIAL,
+    totp_code: "012345",
+  });
+  assert.deepEqual(JSON.parse(calls[1].body ?? "null"), {
+    token: LINK_TOKEN,
+    challenge_id: CHALLENGE,
+    credential: CREDENTIAL,
+    recovery_code: "abcd-efgh",
+  });
+});
+
+test("passkeyRecoverFinish returns a disabled account and keeps no session", async () => {
+  const disabled = { result: "Disabled", user_id: USER };
+  stubFetch(200, disabled);
+  const client = makeClient();
+
+  const result = await client.passkeyRecoverFinish(
+    LINK_TOKEN,
+    CHALLENGE,
+    CREDENTIAL,
+  );
+
+  assert.deepEqual(result, disabled);
+  assert.equal(client.sessionId, undefined);
+});
+
+test("passkeyRecoverFinish throws on an MFA step and keeps no session", async () => {
+  stubFetch(200, { result: "MFA", ticket: "t", allowed_methods: ["Totp"] });
+  const client = makeClient();
+
+  await assert.rejects(
+    client.passkeyRecoverFinish(LINK_TOKEN, CHALLENGE, CREDENTIAL),
+    /Unexpected reply from \/auth\/passkey\/recover\/finish/,
+  );
+  assert.equal(client.sessionId, undefined);
+});
+
+test("the recovery steps rethrow the parsed error body and keep no session", async () => {
+  const client = makeClient();
+
+  stubFetch(400, { type: "FeatureDisabled", feature: "passkey_signup" });
+  await assert.rejects(client.passkeyRecoverSend("alice@example.test"), {
+    type: "FeatureDisabled",
+  });
+
+  stubFetch(401, { type: "InvalidToken" });
+  await assert.rejects(client.passkeyRecoverStart(LINK_TOKEN), {
+    type: "InvalidToken",
+  });
+
+  // A wrong second-factor code
+  stubFetch(401, { type: "InvalidCredentials" });
+  await assert.rejects(
+    client.passkeyRecoverFinish(LINK_TOKEN, CHALLENGE, CREDENTIAL, {
+      totp_code: "000000",
+    }),
+    { type: "InvalidCredentials" },
+  );
+  assert.equal(client.sessionId, undefined);
+});
+
+// ---- add an email, account info, deleting with no email --------------------
+
+test("account.addEmailStart POSTs { email } with the ticket header and takes a 204", async () => {
+  const calls = stubFetch(204);
+  const client = makeSessionClient();
+
+  const result = await client.account.addEmailStart(
+    "alice@example.test",
+    "ticket-token",
+  );
+
+  assert.equal(result, undefined);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].method, "POST");
+  assert.equal(calls[0].url, `${BASE}/auth/account/email/add/start`);
+  assert.equal(calls[0].headers["content-type"], "application/json");
+  assert.equal(calls[0].headers["x-mfa-ticket"], "ticket-token");
+  assert.equal(calls[0].headers["x-session-token"], "tok");
+  // The ticket travels in the header only
+  assert.deepEqual(JSON.parse(calls[0].body ?? "null"), {
+    email: "alice@example.test",
+  });
+});
+
+test("account.addEmailFinish POSTs { code } with the session and no ticket header", async () => {
+  const calls = stubFetch(204);
+  const client = makeSessionClient();
+
+  const result = await client.account.addEmailFinish("01234567");
+
+  assert.equal(result, undefined);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].method, "POST");
+  assert.equal(calls[0].url, `${BASE}/auth/account/email/add/finish`);
+  assert.equal("x-mfa-ticket" in calls[0].headers, false);
+  assert.equal(calls[0].headers["x-session-token"], "tok");
+  assert.deepEqual(JSON.parse(calls[0].body ?? "null"), { code: "01234567" });
+});
+
+test("account.addEmail* rethrow the parsed error body", async () => {
+  const client = makeSessionClient();
+
+  stubFetch(400, { type: "FeatureDisabled", feature: "passkey_signup" });
+  await assert.rejects(client.account.addEmailStart("a@example.test", "t"), {
+    type: "FeatureDisabled",
+  });
+
+  stubFetch(401, { type: "InvalidCredentials" });
+  await assert.rejects(client.account.addEmailFinish("00000000"), {
+    type: "InvalidCredentials",
+  });
+});
+
+test("account.fetchInfo reads email_absent as true only for a plain true", async () => {
+  const client = makeSessionClient();
+
+  const calls = stubFetch(200, { _id: USER, email: "", email_absent: true });
+  assert.deepEqual(await client.account.fetchInfo(), {
+    _id: USER,
+    email: "",
+    email_absent: true,
+  });
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].method, "GET");
+  assert.equal(new URL(calls[0].url).pathname, "/auth/account/");
+  assert.equal(calls[0].headers["x-session-token"], "tok");
+
+  // A server that predates the field, and anything that is not a plain true
+  for (const sent of [undefined, false, null, 1, "true"]) {
+    stubFetch(200, {
+      _id: USER,
+      email: "a@example.test",
+      ...(sent === undefined ? {} : { email_absent: sent }),
+    });
+
+    assert.deepEqual(
+      await client.account.fetchInfo(),
+      { _id: USER, email: "a@example.test", email_absent: false },
+      `sent ${JSON.stringify(sent)}`,
+    );
+  }
+});
+
+test("account.fetchEmail still returns the email string", async () => {
+  stubFetch(200, { _id: USER, email: "", email_absent: true });
+
+  assert.equal(await makeSessionClient().account.fetchEmail(), "");
+});
+
+/** A validated ticket, as `MFA.createTicket` hands one out */
+async function makeTicket(client: InstanceType<typeof Client>) {
+  const { MFATicket } = await loadSrc<MFAModule>("classes/MFA.ts");
+  return new MFATicket(
+    client,
+    { token: "ticket-token" } as never,
+    (() => {}) as never,
+  );
+}
+
+test("MFATicket.deleteAccount with a username sends { username } and the ticket header", async () => {
+  const calls = stubFetch(204);
+  const ticket = await makeTicket(makeSessionClient());
+
+  await ticket.deleteAccount("Alice");
+
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].method, "POST");
+  assert.equal(new URL(calls[0].url).pathname, "/auth/account/delete");
+  assert.equal(new URL(calls[0].url).search, "");
+  assert.equal(calls[0].headers["x-mfa-ticket"], "ticket-token");
+  assert.equal(calls[0].headers["x-session-token"], "tok");
+  // As typed: no trimming, no case folding
+  assert.deepEqual(JSON.parse(calls[0].body ?? "null"), { username: "Alice" });
+});
+
+test("MFATicket.deleteAccount without a username sends what it always sent", async () => {
+  const calls = stubFetch(204);
+  const ticket = await makeTicket(makeSessionClient());
+
+  await ticket.deleteAccount();
+
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].method, "POST");
+  assert.equal(new URL(calls[0].url).pathname, "/auth/account/delete");
+  assert.equal(calls[0].headers["x-mfa-ticket"], "ticket-token");
+  assert.deepEqual(JSON.parse(calls[0].body ?? "null"), {});
+});
+
+test("MFATicket.deleteAccount spends the ticket even when the server refuses", async () => {
+  const refusal = {
+    type: "FailedValidation",
+    error: "username does not match",
+  };
+  stubFetch(400, refusal);
+  const ticket = await makeTicket(makeSessionClient());
+
+  // This route goes through stoat-api's client, which throws the error
+  // body as text, not parsed
+  await assert.rejects(
+    ticket.deleteAccount("wrong"),
+    (error) => error === JSON.stringify(refusal),
+  );
+  assert.throws(
+    () => ticket.deleteAccount("Alice"),
+    (error) => error === "Already used this ticket!",
+  );
 });
 
 // ---- password sign-in, which shares the session step -------------------------

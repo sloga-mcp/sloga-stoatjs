@@ -66,10 +66,15 @@ import {
   RE_SPOILER,
 } from "./lib/regex.js";
 import type {
+  DataPasskeySignupStart,
   PasskeyChallenge,
   PasskeyCredentialJSON,
   PasskeyInfo,
   PasskeyLoginResponse,
+  PasskeyRecoverSecondFactor,
+  ResponsePasskeyRecoverStart,
+  ResponsePasskeyRegisterStart,
+  ResponsePasskeySignupStart,
 } from "./types/passkeys.js";
 
 export type Session = { _id: string; token: string; user_id: string } | string;
@@ -730,22 +735,34 @@ export class Client extends AsyncEventEmitter<Events> {
      * Start adding a passkey. Run the ceremony with the returned options,
      * then give its result to `registerFinish`. Takes no MFA ticket: the
      * ticket goes with `registerFinish`.
-     * @returns Challenge id and WebAuthn creation options (JSON form)
+     *
+     * `ticket_required` in the answer says whether `registerFinish` will
+     * need one. When it is false (a first passkey on an account made by
+     * Google or Apple sign-in, or with no usable password, from a session
+     * that signed in a few minutes ago) call `registerFinish` with no
+     * ticket and ask for no password. It is a hint: the server decides again
+     * at finish. An answer without the field reads as true.
+     * @returns Challenge id, WebAuthn creation options (JSON form) and
+     * whether the finish step needs an MFA ticket
      */
-    registerStart: async (): Promise<PasskeyChallenge> =>
-      (await this.#apiReq(
+    registerStart: async (): Promise<ResponsePasskeyRegisterStart> => {
+      const data = (await this.#apiReq(
         "POST",
         "/auth/passkey/register/start",
-      )) as PasskeyChallenge,
+      )) as PasskeyChallenge & { ticket_required?: unknown };
+
+      // Only a plain false lifts the ticket
+      return { ...data, ticket_required: data.ticket_required !== false };
+    },
 
     /**
      * Finish adding a passkey
      * @param challengeId Challenge id from `registerStart`
      * @param credential Result of the ceremony (JSON form), sent as given
      * @param name Name to show for the passkey
-     * @param ticket Valid MFA ticket token. The server lets a first passkey
-     * through without one in a narrow case; otherwise leaving it out
-     * rejects with `NotPrivileged`.
+     * @param ticket Valid MFA ticket token. Leave it out only when
+     * `registerStart` answered `ticket_required: false`; otherwise leaving
+     * it out rejects with `NotPrivileged`.
      * @returns The new passkey
      */
     registerFinish: async (
@@ -1177,12 +1194,30 @@ export class Client extends AsyncEventEmitter<Events> {
     credential: PasskeyCredentialJSON,
     friendlyName?: string,
   ): Promise<PasskeyLoginResponse> {
-    await this.#fetchConfiguration();
-    const data = (await this.#apiReq("POST", "/auth/passkey/login/finish", {
+    return this.#passkeySessionReq("/auth/passkey/login/finish", {
       challenge_id: challengeId,
       credential,
       friendly_name: friendlyName,
-    })) as PasskeyLoginResponse | null;
+    });
+  }
+
+  /**
+   * Send the last step of a passkey flow that ends signed in (sign-in,
+   * sign-up, recovery) and keep the session of its reply.
+   * @param path Route
+   * @param body Request body
+   * @returns The new session, or the disabled account
+   */
+  async #passkeySessionReq(
+    path: string,
+    body: Record<string, unknown>,
+  ): Promise<PasskeyLoginResponse> {
+    await this.#fetchConfiguration();
+    const data = (await this.#apiReq(
+      "POST",
+      path,
+      body,
+    )) as PasskeyLoginResponse | null;
 
     if (
       data?.result === "Success" &&
@@ -1198,7 +1233,208 @@ export class Client extends AsyncEventEmitter<Events> {
       return data;
     }
 
-    throw new Error("Unexpected reply from /auth/passkey/login/finish");
+    throw new Error(`Unexpected reply from ${path}`);
+  }
+
+  /**
+   * Start creating an account with a passkey. Needs no session.
+   *
+   * The server checks everything the account will need (username, invite,
+   * referral code, email, captcha) and holds it as a pending sign-up for 15
+   * minutes. Nothing else about the account can be changed after this call.
+   *
+   * With an email, the answer has `email_code_required: true`: a code was
+   * mailed, and {@link passkeySignupCode} has to confirm it before
+   * {@link passkeySignupOptions} works. The answer is the same when the
+   * address already has an account (that mailbox gets a notice, not a code)
+   * and when the address is over its mail allowance (nothing is mailed at
+   * all): the call looks like a success either way, and no code will ever
+   * confirm that sign-up. Say "if you did not get a code, try again later"
+   * rather than promising one.
+   *
+   * Without an email, `no_email_ack` must be true and the answer has
+   * `email_code_required: false`: go straight to {@link passkeySignupOptions}.
+   * Rejects with `InvalidOperation` when an email is required after all
+   * (`signup_without_email` is off, the server's allowance of such sign-ups
+   * is used up for now, or the acknowledgement is missing).
+   *
+   * Rejects with the parsed API error body: `FeatureDisabled` (passkeys or
+   * passkey sign-up off), `UsernameTaken`, `MissingInvite`, `InvalidInvite`,
+   * `FailedValidation`, a captcha error, among others.
+   * @param data Sign-up details
+   * @returns Pending sign-up id and whether an emailed code is needed
+   */
+  async passkeySignupStart(
+    data: DataPasskeySignupStart,
+  ): Promise<ResponsePasskeySignupStart> {
+    return (await this.#apiReq("POST", "/auth/passkey/signup/start", {
+      username: data.username,
+      email: data.email,
+      no_email_ack: data.no_email_ack,
+      invite: data.invite,
+      referral_code: data.referral_code,
+      invite_code: data.invite_code,
+      captcha: data.captcha,
+    })) as ResponsePasskeySignupStart;
+  }
+
+  /**
+   * Confirm the email of a pending sign-up with the code that was mailed.
+   * Only for a sign-up that gave an email.
+   *
+   * A wrong code, a used one, and a sign-up that is unknown or has run out
+   * all reject with `InvalidCredentials`; they cannot be told apart. The
+   * fifth wrong code ends the sign-up: start again.
+   * @param signupId Pending sign-up id from {@link passkeySignupStart}
+   * @param code The code from the email (8 digits)
+   */
+  async passkeySignupCode(signupId: string, code: string): Promise<void> {
+    await this.#apiReq("POST", "/auth/passkey/signup/code", {
+      signup_id: signupId,
+      code,
+    });
+  }
+
+  /**
+   * Mail a new code for a pending sign-up; the one sent before stops
+   * working.
+   *
+   * Resolves (204) whether or not anything was mailed: a second request
+   * inside a minute sends nothing, and neither does one for a sign-up that
+   * is unknown or has expired. An expired sign-up only shows at
+   * {@link passkeySignupCode} (`InvalidCredentials`), so never treat this
+   * call resolving as proof a mail went out.
+   * @param signupId Pending sign-up id from {@link passkeySignupStart}
+   */
+  async passkeySignupResend(signupId: string): Promise<void> {
+    await this.#apiReq("POST", "/auth/passkey/signup/resend", {
+      signup_id: signupId,
+    });
+  }
+
+  /**
+   * Get the options to create the passkey of a pending sign-up. Run the
+   * ceremony with them, then give its result to {@link passkeySignupFinish}.
+   *
+   * Rejects with `InvalidCredentials` for a sign-up that is unknown, has
+   * run out, or gave an email that is not confirmed yet; with
+   * `InvalidOperation` when a sign-up with no email cannot go ahead any
+   * more (an email is required).
+   * @param signupId Pending sign-up id from {@link passkeySignupStart}
+   * @returns Challenge id and WebAuthn creation options (JSON form)
+   */
+  async passkeySignupOptions(signupId: string): Promise<PasskeyChallenge> {
+    return (await this.#apiReq("POST", "/auth/passkey/signup/options", {
+      signup_id: signupId,
+    })) as PasskeyChallenge;
+  }
+
+  /**
+   * Finish a passkey sign-up: create the account and sign in, creating a
+   * new session in the process. The session is kept exactly as
+   * {@link login} keeps one, and is also returned.
+   *
+   * The server reads only what is passed here; which sign-up this is comes
+   * from the challenge. Every check from the start step runs again, so this
+   * can still reject with `UsernameTaken`, `InvalidInvite`,
+   * `InvalidOperation` (no email, and the allowance ran out meanwhile) or
+   * `InvalidCredentials` (the email was claimed meanwhile, or the ceremony
+   * failed). A failed ceremony leaves the sign-up for another
+   * {@link passkeySignupOptions}; any refusal after it spends the sign-up,
+   * and the person starts again.
+   * @param challengeId Challenge id from {@link passkeySignupOptions}
+   * @param credential Result of the ceremony (JSON form), sent as given
+   * @param friendlyName Friendly name used for the session
+   * @returns The new session
+   */
+  async passkeySignupFinish(
+    challengeId: string,
+    credential: PasskeyCredentialJSON,
+    friendlyName?: string,
+  ): Promise<PasskeyLoginResponse> {
+    return this.#passkeySessionReq("/auth/passkey/signup/finish", {
+      challenge_id: challengeId,
+      credential,
+      friendly_name: friendlyName,
+    });
+  }
+
+  /**
+   * Ask for a link to replace a lost passkey. Needs no session.
+   *
+   * Always resolves (204), at once: whether the address has an account and
+   * whether a link was mailed is never told. A link goes only to an account
+   * with a confirmed email and at least one passkey, at most once in ten
+   * minutes, and works for 30 minutes. An account with no email cannot
+   * recover this way.
+   *
+   * Rejects with `FeatureDisabled` unless both passkeys and passkey sign-up
+   * are on (`features.passkeys.available` and `.signup`).
+   * @param email Email of the account
+   */
+  async passkeyRecoverSend(email: string): Promise<void> {
+    await this.#apiReq("POST", "/auth/passkey/recover/send", { email });
+  }
+
+  /**
+   * Open a recovery link: get the options for creating the new passkey, and
+   * whether the finish step also needs a second factor. Needs no session.
+   * The link stays good, and this can be called again for a new challenge.
+   *
+   * Rejects with `InvalidToken` for a link that is malformed, unknown,
+   * expired or used, or whose account can no longer recover; with
+   * `FeatureDisabled` unless both passkeys and passkey sign-up are on.
+   * @param token The token from the recovery link
+   * @returns Challenge id, WebAuthn creation options (JSON form) and
+   * whether a second factor is needed
+   */
+  async passkeyRecoverStart(
+    token: string,
+  ): Promise<ResponsePasskeyRecoverStart> {
+    return (await this.#apiReq("POST", "/auth/passkey/recover/start", {
+      token,
+    })) as ResponsePasskeyRecoverStart;
+  }
+
+  /**
+   * Finish a recovery: store the new passkey and sign in, creating a new
+   * session in the process. The session is kept exactly as {@link login}
+   * keeps one, and is also returned. A disabled account is returned, not
+   * thrown, and no session is kept.
+   *
+   * Recovery REMOVES EVERY OTHER PASSKEY AND EVERY SESSION of the account;
+   * say so before the person goes ahead. The link works once.
+   *
+   * When {@link passkeyRecoverStart} answered `second_factor_required`,
+   * give an authenticator code or an MFA recovery code. A wrong code
+   * rejects with `InvalidCredentials`, counts against the account's
+   * lockout, and costs the challenge: call {@link passkeyRecoverStart}
+   * again (the link stays good), run a new ceremony, and send the new
+   * result with the new code. A missing code, or both codes, also rejects
+   * with `InvalidCredentials` but spends nothing. `LockedOut` means the
+   * account is locked for now.
+   *
+   * Rejects with `InvalidToken` for a bad, expired or used link; with
+   * `FeatureDisabled` unless both passkeys and passkey sign-up are on.
+   * @param token The token from the recovery link
+   * @param challengeId Challenge id from {@link passkeyRecoverStart}
+   * @param credential Result of the ceremony (JSON form), sent as given
+   * @param secondFactor Authenticator code or MFA recovery code
+   * @returns The new session, or the disabled account
+   */
+  async passkeyRecoverFinish(
+    token: string,
+    challengeId: string,
+    credential: PasskeyCredentialJSON,
+    secondFactor?: PasskeyRecoverSecondFactor,
+  ): Promise<PasskeyLoginResponse> {
+    return this.#passkeySessionReq("/auth/passkey/recover/finish", {
+      token,
+      challenge_id: challengeId,
+      credential,
+      totp_code: secondFactor?.totp_code,
+      recovery_code: secondFactor?.recovery_code,
+    });
   }
 
   /**

@@ -219,13 +219,37 @@ export class MFATicket {
 
   /**
    * Delete account
+   *
+   * For an account with an email this mails a confirmation link, and
+   * nothing is deleted until the link is confirmed.
+   *
+   * An account with no email (`email_absent`) gets no link: it must pass
+   * its username, typed out by the person (exact match, case and all), and
+   * a resolved call (204) is FINAL. The account is disabled and signed out
+   * everywhere at once; there is no second step and no undo. A wrong or
+   * missing username rejects with `FailedValidation`, and the ticket is
+   * spent either way: create a new one to try again.
+   *
+   * An account that owns servers rejects with `InvalidOperation`.
+   *
+   * Like the other calls on this class, this rejects with the error body
+   * as TEXT (a JSON string), not a parsed object: parse it before reading
+   * `type`.
+   * @param username The account's username; only an account with no email
+   * needs it, every other account's is ignored
    */
-  deleteAccount(): Promise<void> {
+  deleteAccount(username?: string): Promise<void> {
     this.#consume();
-    return this.#client.api.post("/auth/account/delete", undefined, {
-      headers: {
-        "X-MFA-Ticket": this.token,
+    return this.#client.api.post(
+      "/auth/account/delete",
+      // The route is in stoat-api's tables, so the body is sent as given;
+      // its published type has none.
+      (username === undefined ? undefined : { username }) as undefined,
+      {
+        headers: {
+          "X-MFA-Ticket": this.token,
+        },
       },
-    });
+    );
   }
 }
