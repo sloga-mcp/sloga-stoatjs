@@ -148,6 +148,16 @@ export class User {
   }
 
   /**
+   * Whether this account only accepts encrypted direct messages and groups.
+   *
+   * Public, server-reported. The server refuses plain writes to or from
+   * such an account; clients use this to block instead of falling back.
+   */
+  get e2eeOnly(): boolean {
+    return this.#collection.getUnderlyingObject(this.id).e2eeOnly === true;
+  }
+
+  /**
    * Pronouns, if the user set any
    */
   get pronouns(): string | undefined {

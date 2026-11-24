@@ -12,6 +12,7 @@ import { decodeTime, ulid } from "ulid";
 import type { Client } from "../Client.js";
 import type { MessageCollection } from "../collections/MessageCollection.js";
 import { MessageFlags, messageFlagAtPosition } from "../hydration/message.js";
+import type { PlainWriteKind } from "../lib/encryptedOnly.js";
 import {
   type EncryptedPayload,
   ProtectedChannelEditRefused,
@@ -377,6 +378,19 @@ export class Message {
   }
 
   /**
+   * Run the app's plain-write guard, if one is installed, for a write of
+   * plain content into a channel (this message's own by default). It
+   * throws to refuse. A channel this client does not hold is not checked;
+   * the server still refuses.
+   */
+  #guardPlainWrite(
+    kind: PlainWriteKind,
+    channel: Channel | undefined,
+  ): void {
+    if (channel) this.#collection.client.plainWriteGuard?.(channel, kind);
+  }
+
+  /**
    * Immutable poll definition when this message carries a poll
    * (server-stamped by the poll create route — unforgeable, the regular
    * send path has no poll field and rejects the Poll flag bit)
@@ -452,6 +466,7 @@ export class Message {
     this.#assertNotEncrypted();
     const poll = this.poll;
     if (!poll) return;
+    this.#guardPlainWrite("poll", this.channel);
 
     const data = (await this.#collection.client.channels.apiReq(
       "PUT",
@@ -615,6 +630,8 @@ export class Message {
     this.#assertNotEncrypted();
     const softres = this.softres;
     if (!softres) return;
+    // The row carries a typed character name
+    this.#guardPlainWrite("softres", this.channel);
 
     const state = (await this.#collection.client.channels.apiReq(
       "PUT",
@@ -654,6 +671,7 @@ export class Message {
     this.#assertNotEncrypted();
     const softres = this.softres;
     if (!softres) return;
+    this.#guardPlainWrite("softres", this.channel);
 
     const state = (await this.#collection.client.channels.apiReq(
       "PATCH",
@@ -777,6 +795,13 @@ export class Message {
     ) {
       throw new ProtectedChannelUnavailable();
     }
+    // The plain copy lands in the destination
+    this.#guardPlainWrite(
+      "forward",
+      typeof destination === "string"
+        ? this.#collection.client.channels.get(destinationId)
+        : destination,
+    );
 
     const message = (await this.#collection.client.channels.apiReq(
       "POST",
@@ -872,6 +897,7 @@ export class Message {
     // Edits are not supported in a Protected channel (S1): a PATCH would
     // carry the new text in plaintext
     if (this.#isProtectedRow) throw new ProtectedChannelEditRefused();
+    this.#guardPlainWrite("edit", this.channel);
     return await this.#collection.client.api.patch(
       `/channels/${this.channelId as ""}/messages/${this.id as ""}`,
       data,
