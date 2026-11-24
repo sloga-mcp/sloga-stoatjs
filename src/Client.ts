@@ -961,6 +961,34 @@ export class Client extends AsyncEventEmitter<Events> {
   }
 
   /**
+   * Withdraw a channel's reveal without closing the channel for the
+   * session: the reveal is removed and the cached rows it covered lose
+   * their server fields again (the same strip every other plaintext row of
+   * a protected channel gets), and rows fetched from now on are stored
+   * stripped. Unlike a conflict or `purgePreProtectRows` nothing latches
+   * and no row is removed, so a later `revealPreProtectRows` from verified
+   * state reveals again. For the E2EE bridge, when it stops vouching for
+   * the channel (a dispose).
+   * @param channelId Channel id
+   */
+  clearPreProtectReveal(channelId: string): void {
+    this.protectedHistory.clearReveal(channelId);
+    this.#reconcilePreProtectRows(channelId);
+  }
+
+  /**
+   * Withdraw every reveal this client holds; see
+   * {@link Client.clearPreProtectReveal}.
+   */
+  clearAllPreProtectReveals(): void {
+    batch(() => {
+      for (const channelId of this.protectedHistory.revealedChannels()) {
+        this.clearPreProtectReveal(channelId);
+      }
+    });
+  }
+
+  /**
    * Remove the cached plaintext rows of a channel after a wipe of its
    * pre-protect history (design 9.5 "Wipe purge"): every cached row of the
    * channel that carries no `encrypted` and is not a local end-to-end

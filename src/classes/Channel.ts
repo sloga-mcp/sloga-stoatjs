@@ -1060,12 +1060,32 @@ export class Channel {
       `/channels/${this.id as ""}/messages/${messageId as ""}`,
     );
 
-    const row = this.#collection.client.messages.getOrCreate(
-      message._id,
+    const row = this.#collection.client.messages.getOrCreateIn(
+      this.id,
       message,
     );
+    if (!row) throw new Error("Message is not in this channel");
     this.#decryptProtected([row]);
     return row;
+  }
+
+  /**
+   * Store the rows a fetch of this channel answered. A row that names
+   * another channel is dropped before it is hydrated (see
+   * `MessageCollection.getOrCreateIn`), so what comes back holds rows of
+   * this channel only.
+   * @param messages Rows from the response
+   */
+  #storeFetched(messages: APIMessage[]): Message[] {
+    const rows: Message[] = [];
+    for (const message of messages) {
+      const row = this.#collection.client.messages.getOrCreateIn(
+        this.id,
+        message,
+      );
+      if (row) rows.push(row);
+    }
+    return rows;
   }
 
   /**
@@ -1122,9 +1142,7 @@ export class Channel {
       { ...params },
     )) as APIMessage[];
 
-    const rows = messages.map((message) =>
-      this.#collection.client.messages.getOrCreate(message._id, message),
-    );
+    const rows = batch(() => this.#storeFetched(messages));
     this.#decryptProtected(rows);
     return rows;
   }
@@ -1166,9 +1184,7 @@ export class Channel {
     )) as { messages: APIMessage[]; users: APIUser[]; members?: APIMember[] };
 
     const result = batch(() => ({
-      messages: data.messages.map((message) =>
-        this.#collection.client.messages.getOrCreate(message._id, message),
-      ),
+      messages: this.#storeFetched(data.messages),
       users: data.users.map((user) =>
         this.#collection.client.users.getOrCreate(user._id, user),
       ),
@@ -1195,11 +1211,7 @@ export class Channel {
       params,
     )) as APIMessage[];
 
-    const rows = batch(() =>
-      messages.map((message) =>
-        this.#collection.client.messages.getOrCreate(message._id, message),
-      ),
-    );
+    const rows = batch(() => this.#storeFetched(messages));
     this.#decryptProtected(rows);
     return rows;
   }
@@ -1227,9 +1239,7 @@ export class Channel {
     )) as { messages: APIMessage[]; users: APIUser[]; members?: APIMember[] };
 
     const result = batch(() => ({
-      messages: data.messages.map((message) =>
-        this.#collection.client.messages.getOrCreate(message._id, message),
-      ),
+      messages: this.#storeFetched(data.messages),
       users: data.users.map((user) =>
         this.#collection.client.users.getOrCreate(user._id, user),
       ),
@@ -1419,6 +1429,35 @@ export class Channel {
   }
 
   /**
+   * Store the starter or last messages a forum listing answered. They
+   * belong to the posts, not to this channel, so the fetch guard of
+   * `#storeFetched` does not fit; but a forum listing never carries a row
+   * of a protected or pinned channel, so one that names such a channel (or
+   * an id already cached in one) is dropped before it is hydrated.
+   * @param messages Rows from the response
+   */
+  #storePostRows(messages: APIMessage[]): Message[] {
+    const client = this.#collection.client;
+    const rows: Message[] = [];
+    for (const message of messages) {
+      if (
+        typeof message?.channel !== "string" ||
+        client.isProtectedChannel(message.channel)
+      ) {
+        console.warn("[messages] dropped a forum row of a protected channel", {
+          channelId: this.id,
+        });
+        continue;
+      }
+
+      const row = client.messages.getOrCreate(message._id, message);
+      if (client.isProtectedChannel(row.channelId)) continue;
+      rows.push(row);
+    }
+    return rows;
+  }
+
+  /**
    * Fetch posts of this forum
    * @param params sort: latest_activity (default) | creation_date;
    *   tag: filter to a tag id; archived: list archived posts instead;
@@ -1483,12 +1522,8 @@ export class Channel {
         posts: response.posts.map((post) =>
           this.#collection.getOrCreate(post._id, post),
         ),
-        starters: response.starters?.map((starter) =>
-          this.#collection.client.messages.getOrCreate(starter._id, starter),
-        ),
-        lastMessages: (response.last_messages ?? []).map((message) =>
-          this.#collection.client.messages.getOrCreate(message._id, message),
-        ),
+        starters: response.starters && this.#storePostRows(response.starters),
+        lastMessages: this.#storePostRows(response.last_messages ?? []),
         stats: response.stats
           ? new Map<string, { replies: number; lastMessageId?: string }>(
               response.stats.map((entry) => [

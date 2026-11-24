@@ -6,6 +6,14 @@ import type { HydratedMessage } from "../hydration/message.js";
 import { ClassCollection } from "./Collection.js";
 
 /**
+ * The error a single-message fetch rejects with when the server answers a
+ * row of another channel.
+ */
+function notInChannel(): Error {
+  return new Error("Message is not in this channel");
+}
+
+/**
  * Collection of Messages
  */
 export class MessageCollection extends ClassCollection<
@@ -20,13 +28,59 @@ export class MessageCollection extends ClassCollection<
    */
   async fetch(channelId: string, messageId: string): Promise<Message> {
     const message = this.get(messageId);
-    if (message && !this.isPartial(messageId)) return message;
+    if (message && !this.isPartial(messageId)) {
+      // A row cached under another channel is not the one asked for
+      if (message.channelId !== channelId) throw notInChannel();
+      return message;
+    }
 
     const data = await this.client.api.get(
       `/channels/${channelId as ""}/messages/${messageId as ""}`,
     );
 
-    return this.getOrCreate(data._id, data, false);
+    const row = this.getOrCreateIn(channelId, data);
+    if (!row) throw notInChannel();
+    return row;
+  }
+
+  /**
+   * Store a row a server sent in answer to a fetch of one channel. A row
+   * that names any other channel is dropped before it is hydrated, and an
+   * id already cached under another channel is not handed back either. A
+   * row is stripped or kept by the channel it names, so without this a
+   * server could answer a fetch of a protected channel with rows that name
+   * an ordinary one and have its text shown there. No fetch of a channel
+   * legitimately answers rows of another, so this holds for every channel.
+   * A cached partial is replaced whole: nothing an earlier event wrote on
+   * it survives under the fetched row. Logs ids only.
+   * @param channelId Channel that was fetched
+   * @param data Row from the response
+   * @returns The stored row, or `undefined` when it was dropped
+   */
+  getOrCreateIn(channelId: string, data: APIMessage): Message | undefined {
+    const id = (data as { _id?: unknown } | null | undefined)?._id;
+    if (typeof id !== "string") return undefined;
+
+    if (data.channel !== channelId) {
+      console.warn(
+        "[messages] dropped a fetched row that names another channel",
+        { channelId, messageId: id },
+      );
+      return undefined;
+    }
+
+    if (this.has(id) && this.isPartial(id)) this.delete(id);
+
+    const row = this.getOrCreate(id, data);
+    if (row.channelId !== channelId) {
+      console.warn(
+        "[messages] dropped a fetched row cached under another channel",
+        { channelId, messageId: id },
+      );
+      return undefined;
+    }
+
+    return row;
   }
 
   /**

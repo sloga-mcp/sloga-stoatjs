@@ -161,6 +161,25 @@ export class ProtectedHistoryState {
   }
 
   /**
+   * Remove a channel's reveal and nothing else: no conflict, no wipe, and
+   * the stash stays, so a later reveal is taken like a first one. For the
+   * bridge to withdraw a reveal it can no longer vouch for (a dispose, an
+   * account switch) without closing the channel for the session.
+   * @param channelId Channel id
+   * @returns Whether a reveal was held
+   */
+  clearReveal(channelId: string): boolean {
+    return this.#reveals.delete(channelId);
+  }
+
+  /**
+   * Ids of the channels that hold a reveal.
+   */
+  revealedChannels(): string[] {
+    return [...this.#reveals.keys()];
+  }
+
+  /**
    * Whether a reveal conflict latched this channel (reactive).
    * @param channelId Channel id
    */

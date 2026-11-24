@@ -690,6 +690,41 @@ function isProtectedRowEvent(
 }
 
 /**
+ * The channel a message event that changes an existing row applies to: the
+ * channel the cached row is stored under, never the one the event names. An
+ * event that names another channel than the cached row is refused
+ * (`undefined`): a server must not be able to pick the rules a row is
+ * updated by, or move it, by naming a channel of its choice. With no cached
+ * row, or a partial that has no channel yet, the event's channel is all
+ * there is. Logs ids only.
+ * @param client Client
+ * @param id Message id
+ * @param eventChannel Channel id from the event
+ */
+function eventRowChannel(
+  client: Client,
+  id: string,
+  eventChannel: string,
+): string | undefined {
+  if (!client.messages.has(id)) return eventChannel;
+
+  const cached = client.messages.getUnderlyingObject(id).channelId as
+    | string
+    | undefined;
+  if (cached === undefined) return eventChannel;
+
+  if (cached !== eventChannel) {
+    console.warn("[messages] dropped an event that names another channel", {
+      channelId: cached,
+      messageId: id,
+    });
+    return undefined;
+  }
+
+  return cached;
+}
+
+/**
  * Take the server-controlled fields off a LIVE plaintext row of a protected
  * or pinned channel before it is hydrated (S4, R-W4-17). Hydration would
  * strip them as well, with two exceptions this closes: it keeps the fields
@@ -1032,7 +1067,10 @@ export async function handleEvent(
     }
     case "MessageUpdate": {
       if (isEncryptedRow(client, event.id)) break;
-      if (isProtectedRowEvent(client, event.channel, event.id, event.data)) {
+      // Decided by the channel the row is cached under, not the event's
+      const channelId = eventRowChannel(client, event.id, event.channel);
+      if (channelId === undefined) break;
+      if (isProtectedRowEvent(client, channelId, event.id, event.data)) {
         // Protected row (plan D2): only the pin state is server-controlled.
         // No edit stamp, no content, no other field.
         const message = client.messages.getOrPartial(event.id);
@@ -1045,7 +1083,7 @@ export async function handleEvent(
 
         const previousMessage = {
           ...client.messages.getUnderlyingObject(event.id),
-          channelId: event.channel,
+          channelId,
         };
         client.messages.updateUnderlyingObject(event.id, "pinned", pinned);
         client.emit("messageUpdate", message, previousMessage);
@@ -1055,13 +1093,14 @@ export async function handleEvent(
       if (message) {
         const previousMessage = {
           ...client.messages.getUnderlyingObject(event.id),
-          channelId: event.channel,
+          channelId,
         };
 
         client.messages.updateUnderlyingObject(event.id, {
+          // `channel` last: the update data never moves the row
           ...hydrate(
             "message",
-            { ...event.data, channel: event.channel },
+            { ...event.data, channel: channelId },
             client,
             false,
           ),
@@ -1088,13 +1127,16 @@ export async function handleEvent(
     }
     case "MessageAppend": {
       if (isEncryptedRow(client, event.id)) break;
+      // Decided by the channel the row is cached under, not the event's
+      const channelId = eventRowChannel(client, event.id, event.channel);
+      if (channelId === undefined) break;
       // Server embeds never land on a protected row (plan D2)
-      if (isProtectedRowEvent(client, event.channel, event.id)) break;
+      if (isProtectedRowEvent(client, channelId, event.id)) break;
       const message = client.messages.getOrPartial(event.id);
       if (message) {
         const previousMessage = {
           ...client.messages.getUnderlyingObject(event.id),
-          channelId: event.channel,
+          channelId,
         };
 
         client.messages.updateUnderlyingObject(event.id, "embeds", (embeds) => [
@@ -1104,11 +1146,14 @@ export async function handleEvent(
           ) ?? []),
         ]);
 
-        client.messages.updateUnderlyingObject(
-          event.id,
-          "channelId",
-          event.channel,
-        );
+        // Only a partial that had no channel takes one; a row never moves
+        if (client.messages.getUnderlyingObject(event.id).channelId == null) {
+          client.messages.updateUnderlyingObject(
+            event.id,
+            "channelId",
+            channelId,
+          );
+        }
 
         client.emit("messageUpdate", message, previousMessage);
       }
