@@ -57,6 +57,7 @@ import type { HydratedMessage } from "./hydration/message.js";
 import type { HydratedServer } from "./hydration/server.js";
 import type { HydratedServerMember } from "./hydration/serverMember.js";
 import type { HydratedUser } from "./hydration/user.js";
+import type { PlainWriteKind } from "./lib/encryptedOnly.js";
 import { ProtectedPinSet } from "./lib/protectedPins.js";
 import {
   RE_CHANNELS,
@@ -105,7 +106,15 @@ export type ClientConfiguration = RevoltConfig & {
       call_ring_duration?: number;
     };
     // Typing only: the client reads this from `GET /` itself.
-    e2ee?: { split_from?: boolean };
+    e2ee?: {
+      split_from?: boolean;
+      /**
+       * Encrypted-only chats: whether accounts may turn the setting on, and
+       * whether the server refuses plain writes for accounts that have it.
+       * Absent on servers that predate the feature.
+       */
+      only?: { available: boolean; enforced: boolean };
+    };
   };
 };
 
@@ -679,6 +688,16 @@ export class Client extends AsyncEventEmitter<Events> {
   e2ee: E2EEAdapter | undefined;
 
   /**
+   * Set by the embedding app to refuse plain (not end-to-end encrypted)
+   * writes. Called before the request, and before a plain upload, by every
+   * method that writes plain content into a channel, for every channel
+   * type; it throws (an `EncryptedOnlyBlockedError`) to refuse and the
+   * request is then never made. A send the E2EE adapter handled does not
+   * call it. Unset, nothing changes.
+   */
+  plainWriteGuard?: (channel: Channel, kind: PlainWriteKind) => void;
+
+  /**
    * Channel ids this device has seen protected (one-way, persisted per user
    * by the SDK itself; loaded at the top of Ready). See
    * {@link Client.isProtectedChannel}.
@@ -948,6 +967,23 @@ export class Client extends AsyncEventEmitter<Events> {
       this.#protectedFlagStripped.add(channelId);
       this.#notifyProtected("onProtectedFlagStripped", channelId);
     }
+  }
+
+  /**
+   * Apply a channel object's `e2ee_only` field one-way: a literal `true`
+   * marks a cached group encrypted-only. Anything else (absent, `false`)
+   * changes nothing, so the mark is never lowered. The caller must keep
+   * the field out of the changes it applies itself.
+   *
+   * Used by Ready, ChannelCreate, ChannelUpdate and `channels.fetch`.
+   * @param channelId Channel id
+   * @param value The object's `e2ee_only` value (absent = `undefined`)
+   */
+  applyE2eeOnlyFlag(channelId: string, value: unknown): void {
+    if (value !== true || !this.channels.has(channelId)) return;
+    const channel = this.channels.getUnderlyingObject(channelId);
+    if (channel.channelType !== "Group" || channel.e2eeOnly === true) return;
+    this.channels.updateUnderlyingObject(channelId, "e2eeOnly", true);
   }
 
   /**
@@ -1233,12 +1269,18 @@ export class Client extends AsyncEventEmitter<Events> {
    * @param tag Tag
    * @param file File
    * @param uploadUrl Media server upload route
+   * @param channel Channel the file is meant for (a message attachment).
+   *   When given, {@link plainWriteGuard} runs first with `"upload"` and
+   *   nothing is uploaded if it throws.
    */
   async uploadFile(
     tag: string,
     file: File,
     uploadUrl?: string,
+    channel?: Channel,
   ): Promise<string> {
+    if (channel) this.plainWriteGuard?.(channel, "upload");
+
     const body = new FormData();
     body.append("file", file);
 
@@ -1460,7 +1502,35 @@ export class Client extends AsyncEventEmitter<Events> {
   }
 
   /**
-   * Raw request against a custom `/import` route.
+   * Turn Encrypted-only chats on or off for this account.
+   *
+   * The server consumes the MFA ticket before it reads the body, so check
+   * `configuration.features.e2ee.only` and the device state before asking
+   * the user for one. Rejects with the parsed API error body.
+   * @param enabled New value
+   * @param ticket Valid MFA ticket token
+   * @returns The value the server stored
+   */
+  async setEncryptedOnly(enabled: boolean, ticket: string): Promise<boolean> {
+    const reply = (await this.#apiReq(
+      "PUT",
+      "/e2ee/only",
+      { enabled },
+      { "X-MFA-Ticket": ticket },
+    )) as { e2ee_only?: unknown } | null;
+
+    if (typeof reply?.e2ee_only !== "boolean") {
+      throw new Error("Unexpected reply from /e2ee/only");
+    }
+    const value = reply.e2ee_only;
+    if (this.user) {
+      this.users.updateUnderlyingObject(this.user.id, "e2eeOnly", value);
+    }
+    return value;
+  }
+
+  /**
+   * Raw request against a route missing from stoat-api's tables.
    *
    * stoat-api's typed client silently drops the body of routes missing from
    * its generated tables (they arrive as `{}` and Rocket 422s), so these go
@@ -1474,6 +1544,7 @@ export class Client extends AsyncEventEmitter<Events> {
     method: string,
     path: string,
     body?: unknown,
+    headers?: Record<string, string>,
   ): Promise<unknown> {
     const api = this.api as unknown as {
       baseURL: string;
@@ -1485,6 +1556,7 @@ export class Client extends AsyncEventEmitter<Events> {
       headers: {
         ...api.auth,
         ...(body ? { "Content-Type": "application/json" } : {}),
+        ...headers,
       },
       body: body ? JSON.stringify(body) : undefined,
     });

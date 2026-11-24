@@ -23,6 +23,7 @@ import {
   encryptedAckId,
   isPlausibleMessageUlid,
 } from "../lib/encryptedMessage.js";
+import type { PlainWriteKind } from "../lib/encryptedOnly.js";
 import {
   ProtectedChannelUnavailable,
   assertProtectedSendable,
@@ -65,6 +66,13 @@ import { VoiceParticipant } from "./VoiceParticipant.js";
  * Per-(channel, sound) last-trigger timestamps for the soundboard throttle.
  */
 const soundboardThrottle = new Map<string, number>();
+
+/** Watch write refused by the plain-write guard; no request was made. */
+const WATCH_REFUSED = {
+  ok: false as const,
+  status: 0,
+  error: "EncryptionRequired",
+};
 
 /**
  * What the server hands back for any LiveKit participant it mints
@@ -726,9 +734,14 @@ export class Channel {
       data,
     );
 
-    this.#collection.updateUnderlyingObject(
+    const changes = hydrate("channel", channel, this.#collection.client, false);
+    // One-way: the reply never lowers the encrypted-only mark
+    delete (changes as Partial<typeof changes>).e2eeOnly;
+
+    this.#collection.updateUnderlyingObject(this.id, changes);
+    this.#collection.client.applyE2eeOnlyFlag(
       this.id,
-      hydrate("channel", channel, this.#collection.client, false),
+      (channel as { e2ee_only?: unknown }).e2ee_only,
     );
   }
 
@@ -843,6 +856,9 @@ export class Channel {
       e2eeAttachments?: string[];
     } & DataMessageSend;
 
+    // Reached only when no adapter sent the message encrypted
+    this.#guardPlainWrite("send");
+
     const message = await this.#collection.client.api.post(
       `/channels/${this.id as ""}/messages`,
       plainMsg,
@@ -878,6 +894,15 @@ export class Channel {
   }
 
   /**
+   * Run the app's plain-write guard, if one is installed, for a write of
+   * plain content into this channel. It throws to refuse. Call before the
+   * request in an `async` method so the throw is a rejection.
+   */
+  #guardPlainWrite(kind: PlainWriteKind): void {
+    this.#collection.client.plainWriteGuard?.(this, kind);
+  }
+
+  /**
    * Refuse a text search of a protected or pinned channel: the server holds
    * no readable text and the query itself would leak. The pinned listing
    * (no `query`) stays allowed (design 7.4, 7.5).
@@ -901,6 +926,7 @@ export class Channel {
     idempotencyKey: string = ulid(),
   ): Promise<Message> {
     this.#assertNotProtected();
+    this.#guardPlainWrite("poll");
     const message = (await this.#collection.apiReq(
       "POST",
       `/channels/${this.id}/polls`,
@@ -932,6 +958,7 @@ export class Channel {
     idempotencyKey: string = ulid(),
   ): Promise<Message> {
     this.#assertNotProtected();
+    this.#guardPlainWrite("softres");
     const message = (await this.#collection.apiReq(
       "POST",
       `/channels/${this.id}/softres`,
@@ -965,6 +992,7 @@ export class Channel {
     idempotencyKey: string = ulid(),
   ): Promise<ScheduledMessageData> {
     this.#assertNotProtected();
+    this.#guardPlainWrite("schedule");
     const row = (await this.#collection.apiReq(
       "POST",
       `/channels/${this.id}/scheduled_messages`,
@@ -1510,6 +1538,7 @@ export class Channel {
     options?: Record<string, string>,
   ): Promise<string> {
     this.#assertNotProtected();
+    this.#guardPlainWrite("interaction");
     const response = (await this.#collection.apiReq(
       "POST",
       `/channels/${this.id}/interactions`,
@@ -1533,6 +1562,7 @@ export class Channel {
     values?: string[],
   ): Promise<string> {
     this.#assertNotProtected();
+    this.#guardPlainWrite("interaction");
     const response = (await this.#collection.apiReq(
       "POST",
       `/channels/${this.id}/messages/${messageId}/interact`,
@@ -1941,6 +1971,18 @@ export class Channel {
   }
 
   /**
+   * Whether the server marks this group encrypted-only: it refuses plain
+   * writes here and only admits members with encryption set up. Groups
+   * only, and one-way once seen.
+   */
+  get e2eeOnly(): boolean {
+    return (
+      this.type === "Group" &&
+      this.#collection.getUnderlyingObject(this.id).e2eeOnly === true
+    );
+  }
+
+  /**
    * Whether this is a server text channel flagged as an announcement channel
    * (other servers' channels can follow it, and its messages can be
    * published / crossposted).
@@ -2182,6 +2224,8 @@ export class Channel {
     // A protected channel can never host a call (voice join refuses, design
     // 7.4), so this only backstops a plaintext transcript
     this.#assertNotProtected();
+    // The transcript is relayed in plain text to the call's members
+    this.#guardPlainWrite("captions");
     const client = this.#collection.client;
     const [headerKey, headerValue] = client.authenticationHeader;
     await fetch(`${client.options.baseURL}/channels/${this.id}/captions`, {
@@ -2353,14 +2397,36 @@ export class Channel {
     };
   }
 
-  /** Start a watch-together session with the caller as host (paused at 0). */
-  startWatch(media: WatchMediaData): Promise<WatchResult> {
+  /**
+   * Start a watch-together session with the caller as host (paused at 0).
+   * When the plain-write guard refuses (the media reference reaches the
+   * server in plain text) no request is made and the result is
+   * `ok: false` with error `EncryptionRequired`. Never rejects.
+   */
+  async startWatch(media: WatchMediaData): Promise<WatchResult> {
+    if (!this.#watchWriteAllowed()) return WATCH_REFUSED;
     return this.#watchRequest("POST", { media });
   }
 
-  /** Host control write / heartbeat — the FULL host-owned state. */
-  updateWatch(data: DataWatchUpdate): Promise<WatchResult> {
+  /**
+   * Host control write and heartbeat: the FULL host-owned state. A write
+   * that names new media is refused like `startWatch`.
+   */
+  async updateWatch(data: DataWatchUpdate): Promise<WatchResult> {
+    if (data.media !== undefined && !this.#watchWriteAllowed()) {
+      return WATCH_REFUSED;
+    }
     return this.#watchRequest("PATCH", data);
+  }
+
+  /** Whether the plain-write guard lets a watch media write through. */
+  #watchWriteAllowed(): boolean {
+    try {
+      this.#guardPlainWrite("watch");
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   /** End the session (host or channel manager). Idempotent. */
