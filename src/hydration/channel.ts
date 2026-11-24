@@ -47,6 +47,11 @@ export type HydratedChannel = {
    * for the pin-aware predicate).
    */
   protected: boolean;
+  /**
+   * Whether the server marks this group encrypted-only (groups only).
+   * One-way once true: no later object lowers it.
+   */
+  e2eeOnly: boolean;
 
   lastMessageId?: string;
 
@@ -79,12 +84,13 @@ export type HydratedChannel = {
 };
 
 export const channelHydration: Hydrate<
-  // `announcement`, `spoiler` and `protected` are additive; stoat-api
-  // 0.13.5 predates them.
+  // `announcement`, `spoiler`, `protected` and `e2ee_only` are additive;
+  // stoat-api 0.13.5 predates them.
   Merge<APIChannel | ThreadChannelData | ForumChannelData> & {
     announcement?: boolean;
     spoiler?: boolean;
     protected?: boolean;
+    e2ee_only?: boolean;
   },
   HydratedChannel
 > = {
@@ -102,6 +108,7 @@ export const channelHydration: Hydrate<
     announcement: "announcement",
     spoiler: "spoiler",
     protected: "protected",
+    e2ee_only: "e2eeOnly",
     parent_channel: "parentChannelId",
     origin_message_id: "originMessageId",
     creator: "creatorId",
@@ -153,6 +160,12 @@ export const channelHydration: Hydrate<
     protected: (channel) =>
       channel.protected === true &&
       (channel.channel_type ?? "TextChannel") === "TextChannel",
+    // Only a literal `true` on a group counts. Objects applied to a channel
+    // that is already cached go through `Client.applyE2eeOnlyFlag` instead
+    // of this value, so the mark is never lowered.
+    e2eeOnly: (channel) =>
+      channel.e2ee_only === true &&
+      (channel.channel_type ?? "Group") === "Group",
     // Present exactly while the SERVER would accept a `join_call` here. The
     // wire object carries `voice` on groups and server text channels, and
     // with it `disabled` (not in the generated API type yet), which keeps a
@@ -200,5 +213,6 @@ export const channelHydration: Hydrate<
     announcement: false,
     spoiler: false,
     protected: false,
+    e2eeOnly: false,
   }),
 };

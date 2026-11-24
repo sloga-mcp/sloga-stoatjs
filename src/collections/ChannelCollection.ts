@@ -40,6 +40,10 @@ export class ChannelCollection extends ClassCollection<
       (data as { protected?: unknown }).protected,
       true,
     );
+    this.client.applyE2eeOnlyFlag(
+      data._id,
+      (data as { e2ee_only?: unknown }).e2ee_only,
+    );
     return instance;
   }
 
