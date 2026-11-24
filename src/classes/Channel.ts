@@ -872,6 +872,8 @@ export class Channel {
       },
     );
 
+    // A response that names a protected channel is a live row (R-W4-38)
+    this.#collection.client.stripLiveProtectedRow(message);
     const sent = this.#collection.client.messages.getOrCreate(
       message._id,
       message,
@@ -936,6 +938,8 @@ export class Channel {
       { body: { ...data, nonce: data.nonce ?? idempotencyKey } },
     )) as { _id: string };
 
+    // The poll response is a live row as well (R-W4-38)
+    this.#collection.client.stripLiveProtectedRow(message);
     const sent = this.#collection.client.messages.getOrCreate(
       message._id,
       message as never,
@@ -968,6 +972,8 @@ export class Channel {
       { body: { ...data, nonce: data.nonce ?? idempotencyKey } },
     )) as { _id: string };
 
+    // The sheet response is a live row as well (R-W4-38)
+    this.#collection.client.stripLiveProtectedRow(message);
     const sent = this.#collection.client.messages.getOrCreate(
       message._id,
       message as never,
@@ -1059,6 +1065,11 @@ export class Channel {
     const message = await this.#collection.client.api.get(
       `/channels/${this.id as ""}/messages/${messageId as ""}`,
     );
+
+    // Another row of this channel is not the one asked for either
+    if (message?._id !== messageId) {
+      throw new Error("Message is not the one that was asked for");
+    }
 
     const row = this.#collection.client.messages.getOrCreateIn(
       this.id,
@@ -1416,6 +1427,8 @@ export class Channel {
     // is already cached), so emit threadCreate locally too.
     this.#collection.client.emit("threadCreate", post);
 
+    // The starter in the response is a live row as well (R-W4-38)
+    this.#collection.client.stripLiveProtectedRow(response.message);
     const message = this.#collection.client.messages.getOrCreate(
       response.message._id,
       response.message,

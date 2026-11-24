@@ -733,10 +733,14 @@ function eventRowChannel(
  * an id at or below the boundary, so a live row is never one the reveal is
  * about: only a fetch stores a revealed row. Rows that carry `encrypted`
  * are left to hydration, which strips them and never stashes.
+ *
+ * The response to a send (message, poll, sheet, forward, forum post) is a
+ * live row as well and goes through here before it is stored (R-W4-38);
+ * see `Client.stripLiveProtectedRow`.
  * @param client Client
  * @param message Wire message from a live event; changed in place
  */
-function stripLiveProtectedRow(client: Client, message: Message): void {
+export function stripLiveProtectedRow(client: Client, message: Message): void {
   if (!client.isProtectedChannel(message.channel)) return;
   if (carriesEncrypted(message)) return;
 
@@ -959,6 +963,12 @@ export async function handleEvent(
       // never create or replace a row shown as decrypted, so it is dropped
       // before any hydration, unread count or emit.
       if (isEncryptedRow(client, event._id)) break;
+      // An id cached under another channel is not a row of the channel this
+      // event names: that channel's last message does not move and the
+      // cached row is not handed to the adapter as one of its own
+      if (eventRowChannel(client, event._id, event.channel) === undefined) {
+        break;
+      }
       // A live plaintext row of a protected channel is never revealed and
       // never stashed, whatever its id says (S4, R-W4-17)
       stripLiveProtectedRow(client, event);

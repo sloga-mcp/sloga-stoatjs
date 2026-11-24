@@ -14,6 +14,14 @@ function notInChannel(): Error {
 }
 
 /**
+ * The error a single-message fetch rejects with when the server answers a
+ * row with another id than the one asked for.
+ */
+function notTheMessage(): Error {
+  return new Error("Message is not the one that was asked for");
+}
+
+/**
  * Collection of Messages
  */
 export class MessageCollection extends ClassCollection<
@@ -37,6 +45,9 @@ export class MessageCollection extends ClassCollection<
     const data = await this.client.api.get(
       `/channels/${channelId as ""}/messages/${messageId as ""}`,
     );
+
+    // Another row of the same channel is not the one asked for either
+    if (data?._id !== messageId) throw notTheMessage();
 
     const row = this.getOrCreateIn(channelId, data);
     if (!row) throw notInChannel();

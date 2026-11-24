@@ -50,7 +50,12 @@ import {
   EventClient,
   type EventClientOptions,
 } from "./events/EventClient.js";
-import { ProtocolV1, UserSlowmodes, handleEvent } from "./events/v1.js";
+import {
+  ProtocolV1,
+  UserSlowmodes,
+  handleEvent,
+  stripLiveProtectedRow,
+} from "./events/v1.js";
 import type { HydratedChannel } from "./hydration/channel.js";
 import type { HydratedEmoji } from "./hydration/emoji.js";
 import {
@@ -981,11 +986,38 @@ export class Client extends AsyncEventEmitter<Events> {
    * {@link Client.clearPreProtectReveal}.
    */
   clearAllPreProtectReveals(): void {
+    const channelIds = this.protectedHistory.revealedChannels();
+    // Every reveal goes before any row is touched, and each channel is
+    // reconciled on its own: a failure in one never leaves another
+    // channel's reveal standing
+    for (const channelId of channelIds) {
+      this.protectedHistory.clearReveal(channelId);
+    }
+
     batch(() => {
-      for (const channelId of this.protectedHistory.revealedChannels()) {
-        this.clearPreProtectReveal(channelId);
+      for (const channelId of channelIds) {
+        try {
+          this.#reconcilePreProtectRows(channelId);
+        } catch {
+          console.error("[protected] reveal clear failed", { channelId });
+        }
       }
     });
+  }
+
+  /**
+   * Take the server-controlled fields off the row a send answered with
+   * (message, poll, sheet, forward, forum post) when it names a protected
+   * or pinned channel, before it is stored. Such a response is a live row:
+   * it is never revealed and never stashed, whatever its id says (S4,
+   * R-W4-17, R-W4-38). Nothing is refused; a row of any other channel is
+   * left as it is.
+   * @internal
+   * @param message Wire message from a send response; changed in place
+   */
+  stripLiveProtectedRow(message: unknown): void {
+    if (typeof message !== "object" || message === null) return;
+    stripLiveProtectedRow(this, message as never);
   }
 
   /**

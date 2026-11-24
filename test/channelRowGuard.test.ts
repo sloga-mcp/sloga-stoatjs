@@ -14,6 +14,18 @@
  * - `Client.clearPreProtectReveal` withdraws a reveal and strips the rows it
  *   covered without latching anything.
  *
+ * Second fix round (re-review RA1, RA3, RA6, RA9):
+ *
+ * - The response to a send (message, poll, sheet, forward, forum post) that
+ *   names a protected channel is a live row: stored stripped, never revealed
+ *   and never stashed (R-W4-38).
+ * - A single-message fetch rejects a row with another id than the one asked
+ *   for, also when it is of the same channel.
+ * - `Client.clearAllPreProtectReveals` removes every reveal before it
+ *   touches a row, so a failure in one channel leaves no reveal standing.
+ * - A `Message` that names another channel than the one its id is cached
+ *   under moves no last message and hands nothing to the adapter.
+ *
  * Run from the package root:
  *
  *   node --test --conditions=browser test/channelRowGuard.test.ts
@@ -112,6 +124,8 @@ type Harness = {
   emitted: string[];
   /** `[id, channelId]` of every row handed to the adapter, per call. */
   handed: [string, string][][];
+  /** `[id, channelId]` of every live row handed to the adapter. */
+  live: [string, string][];
   fire: (event: ServerEvent) => Promise<void>;
   /** Answer of every `api.get` from now on. */
   serveGet: (answer: unknown) => void;
@@ -147,11 +161,13 @@ function setup(options: Record<string, unknown> = {}): Harness {
   );
 
   const handed: [string, string][][] = [];
+  const live: [string, string][] = [];
   client.e2ee = {
     isEncryptedMessage: () => false,
     onChannelProtected: noop,
     onProtectedFlagStripped: noop,
-    onProtectedMessage: noop,
+    onProtectedMessage: (message: { id: string; channelId: string }) =>
+      void live.push([message.id, message.channelId]),
     decryptProtectedHistory: (
       _channel: unknown,
       rows: { id: string; channelId: string }[],
@@ -173,6 +189,7 @@ function setup(options: Record<string, unknown> = {}): Harness {
     client,
     emitted,
     handed,
+    live,
     fire: (event) => handleEvent(client, event as never, noop as never),
     serveGet: (answer) => {
       (client.api as unknown as { get: unknown }).get = () =>
@@ -799,4 +816,274 @@ test("ProtectedHistoryState.clearReveal removes the reveal only", () => {
 
   // Taken like a first reveal, whatever its boundary
   assert.equal(history.setReveal(X, { boundary: OLD2, timeLimit: T }), "set");
+});
+
+// --- RA1: a send response is a live row (R-W4-38) ---------------------------
+
+/** Every `messageCreate` from now on, as `[id, channelId, content]`. */
+function created(h: Harness): unknown[][] {
+  const seen: unknown[][] = [];
+  h.client.on("messageCreate", (message) =>
+    seen.push([message.id, message.channelId, message.content]),
+  );
+  return seen;
+}
+
+/**
+ * The row is stored under X without server text, nothing of it is stashed,
+ * and neither the reveal it was stored under nor a fresh one brings text.
+ */
+function assertLiveStripped(h: Harness, id: string): void {
+  assert.deepEqual(shape([h.client.messages.get(id)!]), [[id, X, ""]]);
+  assert.equal(stored(h.client, id).content, undefined);
+  assert.equal(h.client.protectedHistory.hasStash(id), false);
+
+  h.client.clearPreProtectReveal(X);
+  h.client.revealPreProtectRows(X, REVEAL);
+  assert.deepEqual(h.client.protectedHistory.revealOf(X), REVEAL);
+  assert.equal(stored(h.client, id).content, undefined);
+  assert.equal(h.client.messages.get(id)!.content, "");
+}
+
+test("a send response that names a protected channel is stored stripped under a reveal and never stashed", async () => {
+  const h = await world();
+  h.client.revealPreProtectRows(X, REVEAL);
+  const seen = created(h);
+
+  // Sent in ordinary Z; the server answers a pre-boundary row of X
+  h.servePost(row(OLD, X, { content: ATTACK }));
+  const sent = await channel(h, Z).sendMessage({ content: "hello Z" });
+
+  // Not refused (R-W4-38), and what is announced carries no server text
+  assert.deepEqual(shape([sent]), [[OLD, X, ""]]);
+  assert.deepEqual(seen, [[OLD, X, ""]]);
+  assertLiveStripped(h, OLD);
+});
+
+test("a send response that names a protected channel is not stashed for a later reveal", async () => {
+  const h = await world();
+
+  h.servePost(row(OLD, X, { content: ATTACK }));
+  await channel(h, Z).sendMessage({ content: "hello Z" });
+  assert.equal(h.client.protectedHistory.hasStash(OLD), false);
+
+  // The reveal arrives afterwards: it has nothing to give this row
+  h.client.revealPreProtectRows(X, REVEAL);
+  assertLiveStripped(h, OLD);
+});
+
+test("control: a send response that names its own ordinary channel keeps its text", async () => {
+  const h = await world();
+  h.client.revealPreProtectRows(X, REVEAL);
+  const seen = created(h);
+
+  h.servePost(row(NEW, Z));
+  const sent = await channel(h, Z).sendMessage({ content: "hello Z" });
+
+  assert.deepEqual(shape([sent]), [[NEW, Z, TEXT]]);
+  assert.deepEqual(seen, [[NEW, Z, TEXT]]);
+  assert.equal(channel(h, Z).lastMessageId, NEW);
+});
+
+test("a poll response that names a protected channel is stored stripped and never stashed", async () => {
+  const h = await world();
+  h.client.revealPreProtectRows(X, REVEAL);
+  const seen = created(h);
+
+  h.serveRaw(row(OLD, X, { content: ATTACK }));
+  const sent = await channel(h, Z).createPoll({
+    question: "q",
+    answers: [{ text: "a" }, { text: "b" }],
+  } as never);
+
+  assert.deepEqual(shape([sent]), [[OLD, X, ""]]);
+  assert.deepEqual(seen, [[OLD, X, ""]]);
+  assertLiveStripped(h, OLD);
+});
+
+test("a sheet response that names a protected channel is stored stripped and never stashed", async () => {
+  const h = await world();
+  h.client.revealPreProtectRows(X, REVEAL);
+  const seen = created(h);
+
+  h.serveRaw(row(OLD, X, { content: ATTACK }));
+  const sent = await channel(h, Z).createSoftRes({ title: "t" } as never);
+
+  assert.deepEqual(shape([sent]), [[OLD, X, ""]]);
+  assert.deepEqual(seen, [[OLD, X, ""]]);
+  assertLiveStripped(h, OLD);
+});
+
+test("a forward response that names a protected channel is stored stripped and never stashed", async () => {
+  const h = await world();
+  h.client.revealPreProtectRows(X, REVEAL);
+  h.serveGet([row(NEW2, Z)]);
+  const [source] = await channel(h, Z).fetchMessages();
+
+  // Forwarded from ordinary Z to ordinary W; the answer names X
+  h.serveRaw(row(OLD, X, { content: ATTACK }));
+  const sent = await source.forwardTo(W);
+
+  assert.deepEqual(shape([sent]), [[OLD, X, ""]]);
+  assertLiveStripped(h, OLD);
+});
+
+test("a forum post response whose starter names a protected channel is stored stripped and never stashed", async () => {
+  const h = await world();
+  h.client.revealPreProtectRows(X, REVEAL);
+
+  h.serveRaw({
+    post: {
+      _id: NEW3,
+      channel_type: "Thread",
+      server: SERVER,
+      parent: Z,
+      name: "post",
+    },
+    message: row(OLD, X, { content: ATTACK }),
+  });
+  const result = await channel(h, Z).createPost({
+    title: "post",
+    content: "starter",
+  } as never);
+
+  assert.deepEqual(shape([result.message]), [[OLD, X, ""]]);
+  assertLiveStripped(h, OLD);
+});
+
+// --- RA3: a single fetch answers the id that was asked for -----------------
+
+test("fetchMessage rejects another row of the same channel and stores nothing", async () => {
+  const h = await world();
+  h.client.revealPreProtectRows(X, REVEAL);
+  h.serveGet(row(OLD2, X, { content: ATTACK }));
+
+  await assert.rejects(channel(h, X).fetchMessage(OLD), {
+    message: "Message is not the one that was asked for",
+  });
+  assert.deepEqual(cachedIds(h.client), []);
+  assert.deepEqual(h.handed, []);
+
+  // No row at all is refused the same way
+  h.serveGet(null);
+  await assert.rejects(channel(h, X).fetchMessage(OLD), {
+    message: "Message is not the one that was asked for",
+  });
+
+  // The row that was asked for still comes back
+  h.serveGet(row(OLD, X));
+  assert.deepEqual(shape([await channel(h, X).fetchMessage(OLD)]), [
+    [OLD, X, TEXT],
+  ]);
+});
+
+test("messages.fetch rejects another row of the same channel and stores nothing", async () => {
+  const h = await world();
+  h.client.revealPreProtectRows(X, REVEAL);
+  h.serveGet(row(OLD2, X, { content: ATTACK }));
+
+  await assert.rejects(h.client.messages.fetch(X, OLD), {
+    message: "Message is not the one that was asked for",
+  });
+  assert.deepEqual(cachedIds(h.client), []);
+
+  h.serveGet(null);
+  await assert.rejects(h.client.messages.fetch(X, OLD), {
+    message: "Message is not the one that was asked for",
+  });
+
+  h.serveGet(row(OLD, X));
+  assert.deepEqual(shape([await h.client.messages.fetch(X, OLD)]), [
+    [OLD, X, TEXT],
+  ]);
+});
+
+// --- RA6: clearing every reveal survives a failing channel ------------------
+
+/** Make the adapter throw when asked about one row. */
+function throwOn(h: Harness, id: string): void {
+  (
+    h.client.e2ee as unknown as { isEncryptedMessage: (id: string) => boolean }
+  ).isEncryptedMessage = (asked) => {
+    if (asked === id) throw new Error("adapter failed");
+    return false;
+  };
+}
+
+test("clearAllPreProtectReveals withdraws every reveal when reconciling one channel throws", async () => {
+  // The first revealed channel fails: the second is still cleared, stripped
+  const first = await revealed();
+  throwOn(first, OLD);
+  assert.doesNotThrow(() => first.client.clearAllPreProtectReveals());
+  assert.equal(first.client.protectedHistory.revealOf(X), undefined);
+  assert.equal(first.client.protectedHistory.revealOf(X2), undefined);
+  assert.equal(stored(first.client, OLD3).content, undefined);
+
+  // The second one fails: its reveal is gone all the same
+  const second = await revealed();
+  throwOn(second, OLD3);
+  assert.doesNotThrow(() => second.client.clearAllPreProtectReveals());
+  assert.equal(second.client.protectedHistory.revealOf(X), undefined);
+  assert.equal(second.client.protectedHistory.revealOf(X2), undefined);
+  assert.deepEqual(
+    [OLD, OLD2].map((id) => stored(second.client, id).content),
+    [undefined, undefined],
+  );
+
+  // With no reveal left, a pre-boundary row fetched now is stored stripped
+  second.serveGet([row(OLD5, X2)]);
+  assert.deepEqual(shape(await channel(second, X2).fetchMessages()), [
+    [OLD5, X2, ""],
+  ]);
+});
+
+test("clearAllPreProtectReveals removes every reveal before it reconciles any channel", async () => {
+  const h = await revealed();
+  // Reveals still standing each time a row is looked at during the clear
+  const standing: number[] = [];
+  (
+    h.client.e2ee as unknown as { isEncryptedMessage: (id: string) => boolean }
+  ).isEncryptedMessage = () => {
+    standing.push(h.client.protectedHistory.revealedChannels().length);
+    return false;
+  };
+
+  h.client.clearAllPreProtectReveals();
+
+  assert.equal(standing.length > 0, true);
+  assert.deepEqual(
+    standing.filter((count) => count !== 0),
+    [],
+  );
+});
+
+// --- RA9: a live Message for an id cached under another channel ------------
+
+test("a Message that names another channel than the cached row moves no last message and hands nothing to the adapter", async () => {
+  const h = await world();
+  await h.fire({ type: "Message", ...row(NEW, Z) });
+  assert.deepEqual(shape([h.client.messages.get(NEW)!]), [[NEW, Z, TEXT]]);
+  assert.equal(channel(h, Z).lastMessageId, NEW);
+  const before = channel(h, X).lastMessageId;
+  h.emitted.length = 0;
+
+  // The same id again, now naming protected X
+  await h.fire({ type: "Message", ...row(NEW, X, { content: ATTACK }) });
+
+  assert.equal(channel(h, X).lastMessageId, before);
+  assert.notEqual(channel(h, X).lastMessageId, NEW);
+  assert.deepEqual(h.live, []);
+  assert.deepEqual(h.emitted, []);
+  // The row of Z is where and what it was
+  assert.deepEqual(shape([h.client.messages.get(NEW)!]), [[NEW, Z, TEXT]]);
+});
+
+test("control: a Message for a new id of a protected channel moves its last message and is handed to the adapter", async () => {
+  const h = await world();
+
+  await h.fire({ type: "Message", ...row(NEW3, X) });
+
+  assert.equal(channel(h, X).lastMessageId, NEW3);
+  assert.deepEqual(h.live, [[NEW3, X]]);
+  assert.deepEqual(shape([h.client.messages.get(NEW3)!]), [[NEW3, X, ""]]);
 });
