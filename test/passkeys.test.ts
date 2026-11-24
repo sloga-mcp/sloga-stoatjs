@@ -22,6 +22,9 @@
  * - Sign-up (`passkeySignup*`) and recovery (`passkeyRecover*`): the path,
  *   the exact body with absent optional keys left out, no ticket header;
  *   the two finish steps keep a session the way `passkeyLoginFinish` does.
+ * - None of the three finish steps replaces a session the client already
+ *   holds: with one, nothing is sent; with one that arrives while the request
+ *   runs, the reply is dropped. Both reject with `SessionAlreadyPresentError`.
  * - `account.addEmailStart` sends the ticket header, `addEmailFinish` none;
  *   `account.fetchInfo` reads `email_absent` as true only for a plain true;
  *   `MFATicket.deleteAccount` sends `{ username }` only when given one.
@@ -1203,6 +1206,141 @@ test("the recovery steps rethrow the parsed error body and keep no session", asy
     { type: "InvalidCredentials" },
   );
   assert.equal(client.sessionId, undefined);
+});
+
+// ---- a session already held is never replaced ------------------------------
+
+const HELD = {
+  _id: "01K8P000000000000000000009",
+  token: "held",
+  user_id: USER,
+};
+
+type TestClient = InstanceType<typeof Client>;
+
+/** The three last steps that end signed in, each with its route */
+const FINISHES: {
+  name: string;
+  path: string;
+  run: (client: TestClient) => Promise<unknown>;
+}[] = [
+  {
+    name: "passkeyLoginFinish",
+    path: "/auth/passkey/login/finish",
+    run: (client) => client.passkeyLoginFinish(CHALLENGE, CREDENTIAL, "Phone"),
+  },
+  {
+    name: "passkeySignupFinish",
+    path: "/auth/passkey/signup/finish",
+    run: (client) => client.passkeySignupFinish(CHALLENGE, CREDENTIAL, "Phone"),
+  },
+  {
+    name: "passkeyRecoverFinish",
+    path: "/auth/passkey/recover/finish",
+    run: (client) =>
+      client.passkeyRecoverFinish(LINK_TOKEN, CHALLENGE, CREDENTIAL),
+  },
+];
+
+/** The rejection must be the typed error, and must not carry the new token */
+async function assertRefused(pending: Promise<unknown>) {
+  const { SessionAlreadyPresentError } =
+    await loadSrc<ClientModule>("Client.ts");
+  assert.equal(typeof SessionAlreadyPresentError, "function");
+
+  await assert.rejects(pending, (error: unknown) => {
+    assert.ok(error instanceof SessionAlreadyPresentError);
+    assert.ok(error instanceof Error);
+    assert.equal(error.name, "SessionAlreadyPresentError");
+    assert.equal(error.message.includes(SUCCESS.token), false);
+    assert.equal(
+      JSON.stringify(Object.entries(error)).includes(SUCCESS.token),
+      false,
+    );
+    return true;
+  });
+}
+
+for (const finish of FINISHES) {
+  // Fails if: the last step is sent from a client that already holds a
+  // session (the server would make a session nobody uses), or its reply
+  // replaces the session held
+  test(`${finish.name} sends nothing when a session is already held`, async () => {
+    const calls = stubFetch(200, SUCCESS);
+    const client = makeClient();
+    client.useExistingSession(HELD);
+
+    await assertRefused(finish.run(client));
+
+    assert.equal(calls.length, 0);
+    assert.equal(client.sessionId, HELD._id);
+    assert.deepEqual(client.authenticationHeader, ["X-Session-Token", "held"]);
+  });
+
+  // Fails if: a session stored while the request was on its way is
+  // replaced by the reply (the race between two logins on one page)
+  test(`${finish.name} drops its reply when a session arrived meanwhile`, async () => {
+    const client = makeClient();
+    const calls: string[] = [];
+    globalThis.fetch = (async (input: unknown) => {
+      calls.push(String(input));
+      // Another login finishes first, as the app's lifecycle stores it
+      client.useExistingSession(HELD);
+      return new Response(JSON.stringify(SUCCESS), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    }) as typeof fetch;
+
+    await assertRefused(finish.run(client));
+
+    assert.deepEqual(calls, [`${BASE}${finish.path}`]);
+    assert.equal(client.sessionId, HELD._id);
+    assert.deepEqual(client.authenticationHeader, ["X-Session-Token", "held"]);
+  });
+
+  // Fails if: the guard also refuses a client that holds no session, or
+  // one refusal leaves the client unable to sign in afterwards
+  test(`${finish.name} still keeps a session on a client that holds none`, async () => {
+    stubFetch(200, SUCCESS);
+    const client = makeClient();
+
+    assert.deepEqual(await finish.run(client), SUCCESS);
+    assert.equal(client.sessionId, SESSION);
+
+    // And a second finish on the same client is refused, not stacked
+    const calls = stubFetch(200, { ...SUCCESS, token: "second" });
+    await assertRefused(finish.run(client));
+    assert.equal(calls.length, 0);
+    assert.deepEqual(client.authenticationHeader, [
+      "X-Session-Token",
+      "session-token",
+    ]);
+  });
+}
+
+// Fails if: a bot token counts as "no session" and is replaced
+test("a passkey finish does not replace a bot token either", async () => {
+  const calls = stubFetch(200, SUCCESS);
+  const client = makeClient();
+  client.useExistingSession("bot-token");
+
+  await assertRefused(client.passkeyLoginFinish(CHALLENGE, CREDENTIAL));
+
+  assert.equal(calls.length, 0);
+  assert.deepEqual(client.authenticationHeader, ["X-Bot-Token", "bot-token"]);
+});
+
+// Fails if: the guard reaches the password login, which the app does not
+// send through this client and which must behave as it always did
+test("login is not guarded: it still stores its session", async () => {
+  stubFetch(200, SUCCESS);
+  const client = makeClient();
+  client.useExistingSession(HELD);
+
+  await client.login({ email: "a@example.test", password: "hunter2" });
+
+  assert.equal(client.sessionId, SESSION);
 });
 
 // ---- add an email, account info, deleting with no email --------------------

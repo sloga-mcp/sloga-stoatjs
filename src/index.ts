@@ -1,5 +1,5 @@
 export * as API from "stoat-api";
-export { Client } from "./Client.js";
+export { Client, SessionAlreadyPresentError } from "./Client.js";
 export type {
   ClientConfiguration,
   ClientOptions,

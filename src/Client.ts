@@ -80,6 +80,23 @@ import type {
 export type Session = { _id: string; token: string; user_id: string } | string;
 
 /**
+ * Thrown by the last step of a passkey flow (sign-in, sign-up, recovery)
+ * when this client already holds a session: the one it holds is left as it
+ * is and the new one is not kept. Carries neither the reply nor a token.
+ *
+ * Thrown before anything is sent when the session is there already, and
+ * after the server answered when it arrived while the request ran. In the
+ * second case the server did make the new session (and, for a sign-up, the
+ * account); it is just not used by this client.
+ */
+export class SessionAlreadyPresentError extends Error {
+  constructor() {
+    super("This client already has a session; the new one was not kept");
+    this.name = "SessionAlreadyPresentError";
+  }
+}
+
+/**
  * Per-account limits from the server configuration
  */
 export type ConfigUserLimits = UserLimits;
@@ -1183,7 +1200,9 @@ export class Client extends AsyncEventEmitter<Events> {
    * returned. A disabled account is returned, not thrown, and no session is
    * kept. There is never an MFA step: any other reply throws.
    *
-   * Rejects with the parsed API error body.
+   * Rejects with the parsed API error body, or with
+   * {@link SessionAlreadyPresentError} when this client already holds a
+   * session (that one is kept).
    * @param challengeId Challenge id from {@link passkeyLoginStart}
    * @param credential Result of the ceremony (JSON form), sent as given
    * @param friendlyName Friendly name used for the session
@@ -1204,6 +1223,10 @@ export class Client extends AsyncEventEmitter<Events> {
   /**
    * Send the last step of a passkey flow that ends signed in (sign-in,
    * sign-up, recovery) and keep the session of its reply.
+   *
+   * Never replaces a session this client already holds: with one, nothing
+   * is sent; with one that arrived while the request ran, the reply is
+   * dropped. Both reject with {@link SessionAlreadyPresentError}.
    * @param path Route
    * @param body Request body
    * @returns The new session, or the disabled account
@@ -1213,6 +1236,12 @@ export class Client extends AsyncEventEmitter<Events> {
     body: Record<string, unknown>,
   ): Promise<PasskeyLoginResponse> {
     await this.#fetchConfiguration();
+
+    // Before sending, so no session is made on the server for nothing
+    if (this.#session !== undefined) {
+      throw new SessionAlreadyPresentError();
+    }
+
     const data = (await this.#apiReq(
       "POST",
       path,
@@ -1225,6 +1254,11 @@ export class Client extends AsyncEventEmitter<Events> {
       typeof data._id === "string" &&
       typeof data.user_id === "string"
     ) {
+      // Another login was stored while this request ran: it stands
+      if (this.#session !== undefined) {
+        throw new SessionAlreadyPresentError();
+      }
+
       this.#adoptLoginSession(data);
       return data;
     }
@@ -1342,6 +1376,9 @@ export class Client extends AsyncEventEmitter<Events> {
    * failed). A failed ceremony leaves the sign-up for another
    * {@link passkeySignupOptions}; any refusal after it spends the sign-up,
    * and the person starts again.
+   *
+   * Rejects with {@link SessionAlreadyPresentError} when this client already
+   * holds a session (that one is kept).
    * @param challengeId Challenge id from {@link passkeySignupOptions}
    * @param credential Result of the ceremony (JSON form), sent as given
    * @param friendlyName Friendly name used for the session
@@ -1415,7 +1452,9 @@ export class Client extends AsyncEventEmitter<Events> {
    * account is locked for now.
    *
    * Rejects with `InvalidToken` for a bad, expired or used link; with
-   * `FeatureDisabled` unless both passkeys and passkey sign-up are on.
+   * `FeatureDisabled` unless both passkeys and passkey sign-up are on; with
+   * {@link SessionAlreadyPresentError} when this client already holds a
+   * session (that one is kept).
    * @param token The token from the recovery link
    * @param challengeId Challenge id from {@link passkeyRecoverStart}
    * @param credential Result of the ceremony (JSON form), sent as given
