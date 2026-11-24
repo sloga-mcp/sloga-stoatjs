@@ -53,11 +53,19 @@ import {
 import { ProtocolV1, UserSlowmodes, handleEvent } from "./events/v1.js";
 import type { HydratedChannel } from "./hydration/channel.js";
 import type { HydratedEmoji } from "./hydration/emoji.js";
-import type { HydratedMessage } from "./hydration/message.js";
+import {
+  type HydratedMessage,
+  PROTECTED_STRIPPED_KEYS,
+} from "./hydration/message.js";
 import type { HydratedServer } from "./hydration/server.js";
 import type { HydratedServerMember } from "./hydration/serverMember.js";
 import type { HydratedUser } from "./hydration/user.js";
 import type { PlainWriteKind } from "./lib/encryptedOnly.js";
+import { stripProtectedFlags } from "./lib/protected.js";
+import {
+  type PreProtectReveal,
+  ProtectedHistoryState,
+} from "./lib/protectedHistory.js";
 import { ProtectedPinSet } from "./lib/protectedPins.js";
 import {
   RE_CHANNELS,
@@ -697,6 +705,15 @@ export class Client extends AsyncEventEmitter<Events> {
   readonly protectedPins = new ProtectedPinSet();
 
   /**
+   * Verified reveal of pre-protect rows (S4): which plaintext rows of a
+   * protected channel keep their server fields. In memory only, and written
+   * only through {@link Client.revealPreProtectRows} and
+   * {@link Client.purgePreProtectRows}; with nothing set every such row is
+   * stored stripped.
+   */
+  readonly protectedHistory = new ProtectedHistoryState();
+
+  /**
    * Channels whose server object most recently STRIPPED `protected` this
    * session (see {@link Client.isProtectedFlagStripped}). In memory only.
    */
@@ -899,6 +916,7 @@ export class Client extends AsyncEventEmitter<Events> {
         return;
       }
 
+      const wasProtected = this.isProtectedChannel(channelId);
       if (
         this.channels.has(channelId) &&
         this.channels.getUnderlyingObject(channelId).protected !== true
@@ -908,6 +926,9 @@ export class Client extends AsyncEventEmitter<Events> {
 
       this.protectedPins.add(channelId);
       this.#protectedFlagStripped.delete(channelId);
+      // Rows cached while the channel was ordinary lose their server text
+      // now, exactly like rows fetched from here on
+      if (!wasProtected) this.#reconcilePreProtectRows(channelId);
       this.#notifyProtected("onChannelProtected", channelId);
       return;
     }
@@ -917,6 +938,126 @@ export class Client extends AsyncEventEmitter<Events> {
       this.#protectedFlagStripped.add(channelId);
       this.#notifyProtected("onProtectedFlagStripped", channelId);
     }
+  }
+
+  /**
+   * Reveal the pre-protect rows of a protected channel (S4, design 9.5 arm
+   * 3): rows without `encrypted`, with an id at or below `boundary` and a
+   * ULID time at or before `timeLimit`, are stored with their server fields
+   * from now on, and the ones already cached stripped get theirs back.
+   *
+   * ONLY the E2EE bridge calls this, with values read from native verified
+   * state; never call it with anything a server sent. It lasts for this
+   * client object only. A second call with another boundary, or an invalid
+   * reveal, is a conflict: the reveal is removed, every plaintext row of
+   * the channel is stripped again and the channel takes no reveal for the
+   * rest of the session.
+   * @param channelId Channel id
+   * @param reveal Boundary and time limit from native verified state
+   */
+  revealPreProtectRows(channelId: string, reveal: PreProtectReveal): void {
+    this.protectedHistory.setReveal(channelId, reveal);
+    this.#reconcilePreProtectRows(channelId);
+  }
+
+  /**
+   * Remove the cached plaintext rows of a channel after a wipe of its
+   * pre-protect history (design 9.5 "Wipe purge"): every cached row of the
+   * channel that carries no `encrypted` and is not a local end-to-end
+   * encrypted row, with an id at or below `boundary` (every such row when
+   * `null`). Encrypted rows stay. The channel is marked wiped, so no row of
+   * it is revealed again this session and what is left is stripped.
+   * @param channelId Channel id
+   * @param boundary Highest id to remove, or `null` for every plaintext row
+   * @returns Ids of the removed rows
+   */
+  purgePreProtectRows(channelId: string, boundary: string | null): string[] {
+    const removed: string[] = [];
+
+    batch(() => {
+      for (const id of [...this.messages.keys()]) {
+        const row = this.messages.getUnderlyingObject(id);
+        if (row.channelId !== channelId) continue;
+        if (row.encrypted !== undefined) continue;
+        if (this.e2ee?.isEncryptedMessage(id) === true) continue;
+        if (boundary !== null && !(id <= boundary)) continue;
+
+        this.messages.delete(id);
+        removed.push(id);
+      }
+
+      this.protectedHistory.markWiped(channelId);
+      this.#reconcilePreProtectRows(channelId);
+    });
+
+    return removed;
+  }
+
+  /**
+   * Bring every cached plaintext row of a protected or pinned channel in
+   * line with its reveal: a row the reveal covers gets its stashed fields
+   * back; any other row is stripped, and what it held is stashed while the
+   * channel can still take a reveal. Rows that carry `encrypted` and local
+   * end-to-end encrypted rows are never touched. Does nothing for a channel
+   * that is not protected on this client.
+   */
+  #reconcilePreProtectRows(channelId: string): void {
+    if (!this.isProtectedChannel(channelId)) return;
+    const history = this.protectedHistory;
+
+    batch(() => {
+      const cached = new Set<string>();
+
+      for (const id of [...this.messages.keys()]) {
+        const row = this.messages.getUnderlyingObject(id);
+        if (row.channelId !== channelId) continue;
+        cached.add(id);
+        if (row.encrypted !== undefined) continue;
+        if (this.e2ee?.isEncryptedMessage(id) === true) continue;
+
+        if (history.covers(channelId, { id, encrypted: false })) {
+          const stash = history.takeStash(id);
+          if (stash && stash.channelId === channelId) {
+            this.messages.updateUnderlyingObject(
+              id,
+              stash.fields as Partial<HydratedMessage>,
+            );
+          }
+          continue;
+        }
+
+        // Already stripped at hydration: its fields are in the stash
+        if (history.hasStash(id)) continue;
+
+        const strip: Record<string, unknown> = {};
+        const source = row as Record<string, unknown>;
+        for (const key of PROTECTED_STRIPPED_KEYS) {
+          if (source[key] === undefined) continue;
+          history.stashField(channelId, id, key, source[key]);
+          strip[key] = undefined;
+        }
+
+        if (row.flags != null) {
+          const flags = stripProtectedFlags(row.flags);
+          if (flags !== row.flags) {
+            history.stashField(channelId, id, "flags", row.flags);
+            strip.flags = flags;
+          }
+        }
+
+        if (Object.keys(strip).length) {
+          this.messages.updateUnderlyingObject(
+            id,
+            strip as Partial<HydratedMessage>,
+          );
+        }
+      }
+
+      // A stash entry whose row left the cache restores nothing
+      for (const id of history.stashedIds(channelId)) {
+        if (!cached.has(id)) history.dropStash(id);
+      }
+    });
   }
 
   /**

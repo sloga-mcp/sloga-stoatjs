@@ -17,6 +17,7 @@ import type { APIRoutes } from "stoat-api";
 import { decodeTime, ulid } from "ulid";
 
 import { ChannelCollection } from "../collections/index.js";
+import type { ChannelProtectedHistory } from "../hydration/channel.js";
 import { UNREAD_COUNT_CAP } from "../hydration/channelUnread.js";
 import { hydrate } from "../hydration/index.js";
 import {
@@ -61,6 +62,8 @@ import type { ScheduledMessageData } from "./ScheduledMessage.js";
 import type { DataCreateThread, ThreadChannelData } from "./Thread.js";
 import type { User } from "./User.js";
 import { VoiceParticipant } from "./VoiceParticipant.js";
+
+export type { ChannelProtectedHistory };
 
 /**
  * Per-(channel, sound) last-trigger timestamps for the soundboard throttle.
@@ -1968,6 +1971,19 @@ export class Channel {
    */
   get isProtected(): boolean {
     return this.#collection.getUnderlyingObject(this.id).protected === true;
+  }
+
+  /**
+   * What the server reports about this protected channel's pre-protect
+   * history (S4): the boundary message id and the wipe state. Absent on
+   * any other channel and on a channel protected while empty.
+   *
+   * Informational (wipe progress, the deleted-row count). Never decide a
+   * row's rendering from it: the boundary that counts is the one native
+   * verified.
+   */
+  get protectedHistory(): ChannelProtectedHistory | undefined {
+    return this.#collection.getUnderlyingObject(this.id).protectedHistory;
   }
 
   /**

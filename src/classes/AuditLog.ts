@@ -39,7 +39,9 @@ export type AuditLogAction =
   | "role_delete"
   | "role_ranks_update"
   | "server_update"
-  | "server_owner_transfer";
+  | "server_owner_transfer"
+  | "channel_protect"
+  | "channel_history_wipe";
 
 const ACTIONS = [
   "member_kick",
@@ -65,6 +67,8 @@ const ACTIONS = [
   "role_ranks_update",
   "server_update",
   "server_owner_transfer",
+  "channel_protect",
+  "channel_history_wipe",
 ] as const satisfies readonly AuditLogAction[];
 
 // Compile-time guard: fails to type-check if an action is missing from
