@@ -26,6 +26,11 @@
  * - A `Message` that names another channel than the one its id is cached
  *   under moves no last message and hands nothing to the adapter.
  *
+ * Final audit (FT1):
+ *
+ * - Withdrawing a reveal strips every row it covered. A stash entry the same
+ *   id left under another channel does not count as "already stripped".
+ *
  * Run from the package root:
  *
  *   node --test --conditions=browser test/channelRowGuard.test.ts
@@ -1086,4 +1091,100 @@ test("control: a Message for a new id of a protected channel moves its last mess
   assert.equal(channel(h, X).lastMessageId, NEW3);
   assert.deepEqual(h.live, [[NEW3, X]]);
   assert.deepEqual(shape([h.client.messages.get(NEW3)!]), [[NEW3, X, ""]]);
+});
+
+// --- FT1: a stash entry of another channel never keeps a row's text --------
+
+const OTHER_TEXT = "text of the other channel";
+
+/**
+ * X revealed and holding OLD with its server text, while the stash still
+ * holds an entry for the same id under X2: the server answered a fetch of X2
+ * (protected, no reveal) with OLD, deleted it, then served OLD in X.
+ */
+async function staleStash(): Promise<Harness> {
+  const h = await world();
+  h.client.revealPreProtectRows(X, REVEAL);
+
+  h.serveGet([row(OLD, X2, { content: OTHER_TEXT })]);
+  await channel(h, X2).fetchMessages();
+  assert.deepEqual(shape([h.client.messages.get(OLD)!]), [[OLD, X2, ""]]);
+
+  await h.fire({ type: "MessageDelete", id: OLD, channel: X2 });
+  assert.equal(h.client.messages.get(OLD), undefined);
+  // The row is gone and its stash entry is still held under X2
+  assert.deepEqual(h.client.protectedHistory.stashedIds(X2), [OLD]);
+
+  h.serveGet([row(OLD, X)]);
+  await channel(h, X).fetchMessages();
+  assert.deepEqual(stored(h.client, OLD), {
+    channelId: X,
+    content: TEXT,
+    embeds: undefined,
+    pinned: undefined,
+    edited: false,
+  });
+  return h;
+}
+
+test("clearAllPreProtectReveals strips a revealed row whose id is stashed under another channel", async () => {
+  const h = await staleStash();
+
+  h.client.clearAllPreProtectReveals();
+
+  assert.equal(h.client.protectedHistory.revealOf(X), undefined);
+  assert.equal(stored(h.client, OLD).channelId, X);
+  assert.equal(stored(h.client, OLD).content, undefined);
+  assert.equal(h.client.messages.get(OLD)!.content, "");
+});
+
+test("clearPreProtectReveal strips a revealed row whose id is stashed under another channel, and a later reveal restores this channel's text", async () => {
+  const h = await staleStash();
+
+  h.client.clearPreProtectReveal(X);
+
+  const history = h.client.protectedHistory;
+  assert.equal(history.revealOf(X), undefined);
+  assert.equal(stored(h.client, OLD).channelId, X);
+  assert.equal(stored(h.client, OLD).content, undefined);
+  // What was stripped is held under X now; nothing is left under X2
+  assert.deepEqual(history.stashedIds(X), [OLD]);
+  assert.deepEqual(history.stashedIds(X2), []);
+
+  h.client.revealPreProtectRows(X, REVEAL);
+  assert.equal(stored(h.client, OLD).content, TEXT);
+});
+
+test("control: clearPreProtectReveal leaves a row alone whose fields are stashed under its own channel", async () => {
+  const h = await world();
+  h.serveGet([row(OLD, X)]);
+  await channel(h, X).fetchMessages();
+  assert.equal(stored(h.client, OLD).content, undefined);
+  assert.deepEqual(h.client.protectedHistory.stashedIds(X), [OLD]);
+
+  h.client.clearPreProtectReveal(X);
+
+  assert.equal(stored(h.client, OLD).content, undefined);
+  h.client.revealPreProtectRows(X, REVEAL);
+  assert.equal(stored(h.client, OLD).content, TEXT);
+});
+
+test("ProtectedHistoryState.hasStashFor is true for the channel the entry is held under only", () => {
+  const history = new ProtectedHistoryState();
+  assert.equal(history.hasStashFor(X, OLD), false);
+
+  history.stashField(X2, OLD, "content", OTHER_TEXT);
+  assert.equal(history.hasStash(OLD), true);
+  assert.equal(history.hasStashFor(X2, OLD), true);
+  assert.equal(history.hasStashFor(X, OLD), false);
+
+  // The same id stashed for X replaces the entry of X2 whole
+  history.stashField(X, OLD, "content", TEXT);
+  assert.equal(history.hasStashFor(X, OLD), true);
+  assert.equal(history.hasStashFor(X2, OLD), false);
+  assert.deepEqual(history.takeStash(OLD), {
+    channelId: X,
+    fields: { content: TEXT },
+  });
+  assert.equal(history.hasStashFor(X, OLD), false);
 });

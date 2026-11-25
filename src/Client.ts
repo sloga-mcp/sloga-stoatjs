@@ -1086,8 +1086,10 @@ export class Client extends AsyncEventEmitter<Events> {
           continue;
         }
 
-        // Already stripped at hydration: its fields are in the stash
-        if (history.hasStash(id)) continue;
+        // Already stripped at hydration: its fields are in the stash. Only
+        // an entry of this channel says so; one left under another channel
+        // by the same id says nothing about this row, which is stripped
+        if (history.hasStashFor(channelId, id)) continue;
 
         const strip: Record<string, unknown> = {};
         const source = row as Record<string, unknown>;

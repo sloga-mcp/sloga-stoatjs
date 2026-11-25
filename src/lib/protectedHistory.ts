@@ -264,11 +264,24 @@ export class ProtectedHistoryState {
   }
 
   /**
-   * Whether a row has stashed fields.
+   * Whether an id has stashed fields, under any channel. The stash is keyed
+   * by id alone, so this says nothing about which channel's row they were
+   * stripped from: use {@link ProtectedHistoryState.hasStashFor} to decide
+   * anything about a row.
    * @param id Message id
    */
   hasStash(id: string): boolean {
     return this.#stash.has(id);
+  }
+
+  /**
+   * Whether the stash holds fields stripped from this row of this channel.
+   * False when the id is stashed under another channel.
+   * @param channelId Channel id
+   * @param id Message id
+   */
+  hasStashFor(channelId: string, id: string): boolean {
+    return this.#stash.get(id)?.channelId === channelId;
   }
 
   /**
