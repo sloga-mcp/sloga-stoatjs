@@ -809,6 +809,8 @@ export class Message {
       { body: { destination: destinationId, nonce: idempotencyKey } },
     )) as { _id: string };
 
+    // The forward response is a live row as well (R-W4-38)
+    this.#collection.client.stripLiveProtectedRow(message);
     return this.#collection.client.messages.getOrCreate(
       message._id,
       message as never,

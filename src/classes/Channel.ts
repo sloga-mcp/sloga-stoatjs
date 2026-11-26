@@ -17,6 +17,7 @@ import type { APIRoutes } from "stoat-api";
 import { decodeTime, ulid } from "ulid";
 
 import { ChannelCollection } from "../collections/index.js";
+import type { ChannelProtectedHistory } from "../hydration/channel.js";
 import { UNREAD_COUNT_CAP } from "../hydration/channelUnread.js";
 import { hydrate } from "../hydration/index.js";
 import {
@@ -61,6 +62,8 @@ import type { ScheduledMessageData } from "./ScheduledMessage.js";
 import type { DataCreateThread, ThreadChannelData } from "./Thread.js";
 import type { User } from "./User.js";
 import { VoiceParticipant } from "./VoiceParticipant.js";
+
+export type { ChannelProtectedHistory };
 
 /**
  * Per-(channel, sound) last-trigger timestamps for the soundboard throttle.
@@ -869,6 +872,8 @@ export class Channel {
       },
     );
 
+    // A response that names a protected channel is a live row (R-W4-38)
+    this.#collection.client.stripLiveProtectedRow(message);
     const sent = this.#collection.client.messages.getOrCreate(
       message._id,
       message,
@@ -933,6 +938,8 @@ export class Channel {
       { body: { ...data, nonce: data.nonce ?? idempotencyKey } },
     )) as { _id: string };
 
+    // The poll response is a live row as well (R-W4-38)
+    this.#collection.client.stripLiveProtectedRow(message);
     const sent = this.#collection.client.messages.getOrCreate(
       message._id,
       message as never,
@@ -965,6 +972,8 @@ export class Channel {
       { body: { ...data, nonce: data.nonce ?? idempotencyKey } },
     )) as { _id: string };
 
+    // The sheet response is a live row as well (R-W4-38)
+    this.#collection.client.stripLiveProtectedRow(message);
     const sent = this.#collection.client.messages.getOrCreate(
       message._id,
       message as never,
@@ -1057,12 +1066,37 @@ export class Channel {
       `/channels/${this.id as ""}/messages/${messageId as ""}`,
     );
 
-    const row = this.#collection.client.messages.getOrCreate(
-      message._id,
+    // Another row of this channel is not the one asked for either
+    if (message?._id !== messageId) {
+      throw new Error("Message is not the one that was asked for");
+    }
+
+    const row = this.#collection.client.messages.getOrCreateIn(
+      this.id,
       message,
     );
+    if (!row) throw new Error("Message is not in this channel");
     this.#decryptProtected([row]);
     return row;
+  }
+
+  /**
+   * Store the rows a fetch of this channel answered. A row that names
+   * another channel is dropped before it is hydrated (see
+   * `MessageCollection.getOrCreateIn`), so what comes back holds rows of
+   * this channel only.
+   * @param messages Rows from the response
+   */
+  #storeFetched(messages: APIMessage[]): Message[] {
+    const rows: Message[] = [];
+    for (const message of messages) {
+      const row = this.#collection.client.messages.getOrCreateIn(
+        this.id,
+        message,
+      );
+      if (row) rows.push(row);
+    }
+    return rows;
   }
 
   /**
@@ -1119,9 +1153,7 @@ export class Channel {
       { ...params },
     )) as APIMessage[];
 
-    const rows = messages.map((message) =>
-      this.#collection.client.messages.getOrCreate(message._id, message),
-    );
+    const rows = batch(() => this.#storeFetched(messages));
     this.#decryptProtected(rows);
     return rows;
   }
@@ -1163,9 +1195,7 @@ export class Channel {
     )) as { messages: APIMessage[]; users: APIUser[]; members?: APIMember[] };
 
     const result = batch(() => ({
-      messages: data.messages.map((message) =>
-        this.#collection.client.messages.getOrCreate(message._id, message),
-      ),
+      messages: this.#storeFetched(data.messages),
       users: data.users.map((user) =>
         this.#collection.client.users.getOrCreate(user._id, user),
       ),
@@ -1192,11 +1222,7 @@ export class Channel {
       params,
     )) as APIMessage[];
 
-    const rows = batch(() =>
-      messages.map((message) =>
-        this.#collection.client.messages.getOrCreate(message._id, message),
-      ),
-    );
+    const rows = batch(() => this.#storeFetched(messages));
     this.#decryptProtected(rows);
     return rows;
   }
@@ -1224,9 +1250,7 @@ export class Channel {
     )) as { messages: APIMessage[]; users: APIUser[]; members?: APIMember[] };
 
     const result = batch(() => ({
-      messages: data.messages.map((message) =>
-        this.#collection.client.messages.getOrCreate(message._id, message),
-      ),
+      messages: this.#storeFetched(data.messages),
       users: data.users.map((user) =>
         this.#collection.client.users.getOrCreate(user._id, user),
       ),
@@ -1403,6 +1427,8 @@ export class Channel {
     // is already cached), so emit threadCreate locally too.
     this.#collection.client.emit("threadCreate", post);
 
+    // The starter in the response is a live row as well (R-W4-38)
+    this.#collection.client.stripLiveProtectedRow(response.message);
     const message = this.#collection.client.messages.getOrCreate(
       response.message._id,
       response.message,
@@ -1413,6 +1439,35 @@ export class Channel {
     this.noteOwnMessage(response.post._id);
     post.noteOwnMessage(response.message._id);
     return { post, message };
+  }
+
+  /**
+   * Store the starter or last messages a forum listing answered. They
+   * belong to the posts, not to this channel, so the fetch guard of
+   * `#storeFetched` does not fit; but a forum listing never carries a row
+   * of a protected or pinned channel, so one that names such a channel (or
+   * an id already cached in one) is dropped before it is hydrated.
+   * @param messages Rows from the response
+   */
+  #storePostRows(messages: APIMessage[]): Message[] {
+    const client = this.#collection.client;
+    const rows: Message[] = [];
+    for (const message of messages) {
+      if (
+        typeof message?.channel !== "string" ||
+        client.isProtectedChannel(message.channel)
+      ) {
+        console.warn("[messages] dropped a forum row of a protected channel", {
+          channelId: this.id,
+        });
+        continue;
+      }
+
+      const row = client.messages.getOrCreate(message._id, message);
+      if (client.isProtectedChannel(row.channelId)) continue;
+      rows.push(row);
+    }
+    return rows;
   }
 
   /**
@@ -1480,12 +1535,8 @@ export class Channel {
         posts: response.posts.map((post) =>
           this.#collection.getOrCreate(post._id, post),
         ),
-        starters: response.starters?.map((starter) =>
-          this.#collection.client.messages.getOrCreate(starter._id, starter),
-        ),
-        lastMessages: (response.last_messages ?? []).map((message) =>
-          this.#collection.client.messages.getOrCreate(message._id, message),
-        ),
+        starters: response.starters && this.#storePostRows(response.starters),
+        lastMessages: this.#storePostRows(response.last_messages ?? []),
         stats: response.stats
           ? new Map<string, { replies: number; lastMessageId?: string }>(
               response.stats.map((entry) => [
@@ -1968,6 +2019,19 @@ export class Channel {
    */
   get isProtected(): boolean {
     return this.#collection.getUnderlyingObject(this.id).protected === true;
+  }
+
+  /**
+   * What the server reports about this protected channel's pre-protect
+   * history (S4): the boundary message id and the wipe state. Absent on
+   * any other channel and on a channel protected while empty.
+   *
+   * Informational (wipe progress, the deleted-row count). Never decide a
+   * row's rendering from it: the boundary that counts is the one native
+   * verified.
+   */
+  get protectedHistory(): ChannelProtectedHistory | undefined {
+    return this.#collection.getUnderlyingObject(this.id).protectedHistory;
   }
 
   /**
