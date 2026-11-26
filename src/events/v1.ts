@@ -46,6 +46,7 @@ import {
   carriesEncrypted,
   stripProtectedFlags,
 } from "../lib/protected.js";
+import type { ProtTankSummary } from "../types/prot.js";
 
 import { redactEventForLog } from "./EventClient.js";
 
@@ -537,6 +538,7 @@ type ServerMessage =
     }
   | { type: "DiscordImportFailed"; job_id: string; error: string }
   | { type: "ProtBalanceUpdate"; balance: number; version: number }
+  | { type: "ProtTankUpdate"; channel: string; tank?: ProtTankSummary }
   | {
       /**
        * A user declined a ringing call. Sent privately to the user who
@@ -2440,6 +2442,16 @@ export async function handleEvent(
       if (event.version <= client.protBalanceVersion) break;
       client.protBalanceVersion = event.version;
       client.emit("protBalanceUpdate", event.balance, event.version);
+      break;
+    }
+    case "ProtTankUpdate": {
+      // Same rule as REST reads: an older (version, balance_version) of the
+      // stored tank is dropped; an absent tank removes the entry
+      client.setProtTank(event.channel, event.tank);
+      if (event.tank && client.protTanks.get(event.channel) !== event.tank) {
+        break;
+      }
+      client.emit("protTankUpdate", event.channel, event.tank);
       break;
     }
     case "CalendarEventRsvp": {
