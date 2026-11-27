@@ -144,8 +144,9 @@ export type E2EEServerEvent =
   | ({ type: "MlsCtl" } & E2EEEnvelope)
   // Protected channels (S2, design 7.5): a protected channel's seats or
   // Text group changed. Published on the channel topic with no user ids.
-  // `scope` names what to refetch: `seats` | `text_group`; the client
-  // ignores unknown items. A refetch hint only, never a security input.
+  // `scope` names what to refetch: `seats` | `text_group` | `history` (S4:
+  // the history links changed); the client ignores unknown items. A
+  // refetch hint only, never a security input.
   | { type: "ProtectedChannelChanged"; id: string; scope: string[] };
 
 /**

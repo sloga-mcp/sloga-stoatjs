@@ -16,6 +16,66 @@ import type { Merge } from "../lib/merge.js";
 
 import type { Hydrate } from "./index.js";
 
+/**
+ * What the server reports about a protected channel's pre-protect history
+ * (S4): the boundary message id and where the history wipe stands. `at` is
+ * the server's ISO 8601 timestamp, `by` a user id, `count` the rows deleted.
+ *
+ * Informational. Nothing decides a row's rendering from it: that comes from
+ * native verified state (see `Client.revealPreProtectRows`). The SDK uses it
+ * for the wipe purge only, which removes cached text and reveals nothing.
+ */
+export type ChannelProtectedHistory = {
+  boundary: string;
+  wipe:
+    | { state: "none" }
+    | { state: "requested"; at: string; by: string }
+    | { state: "done"; at: string; count: number };
+};
+
+/**
+ * Whether a value is a non-empty string.
+ * @param value Value
+ */
+function nonEmptyString(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0;
+}
+
+/**
+ * Read a wire `protected_history`. Strict: a non-empty string boundary and
+ * a known wipe state with each of its fields well-formed. Anything else is
+ * `undefined`; never throws. The result holds the known fields only.
+ * @param raw Wire value
+ */
+export function parseChannelProtectedHistory(
+  raw: unknown,
+): ChannelProtectedHistory | undefined {
+  if (typeof raw !== "object" || raw === null) return undefined;
+  const { boundary, wipe } = raw as { boundary?: unknown; wipe?: unknown };
+  if (!nonEmptyString(boundary)) return undefined;
+  if (typeof wipe !== "object" || wipe === null) return undefined;
+
+  const { state, at, by, count } = wipe as Record<string, unknown>;
+  switch (state) {
+    case "none":
+      return { boundary, wipe: { state: "none" } };
+    case "requested":
+      if (!nonEmptyString(at) || !nonEmptyString(by)) return undefined;
+      return { boundary, wipe: { state: "requested", at, by } };
+    case "done":
+      if (
+        !nonEmptyString(at) ||
+        !Number.isSafeInteger(count) ||
+        (count as number) < 0
+      ) {
+        return undefined;
+      }
+      return { boundary, wipe: { state: "done", at, count: count as number } };
+    default:
+      return undefined;
+  }
+}
+
 export type HydratedChannel = {
   id: string;
   channelType: APIChannel["channel_type"] | "Thread" | "Forum";
@@ -47,6 +107,12 @@ export type HydratedChannel = {
    * for the pin-aware predicate).
    */
   protected: boolean;
+  /**
+   * The server's report of this protected channel's pre-protect history
+   * (server text channels only; absent on a channel protected while empty).
+   * Informational: see {@link ChannelProtectedHistory}.
+   */
+  protectedHistory?: ChannelProtectedHistory;
   /**
    * Whether the server marks this group encrypted-only (groups only).
    * One-way once true: no later object lowers it.
@@ -84,12 +150,13 @@ export type HydratedChannel = {
 };
 
 export const channelHydration: Hydrate<
-  // `announcement`, `spoiler`, `protected` and `e2ee_only` are additive;
-  // stoat-api 0.13.5 predates them.
+  // `announcement`, `spoiler`, `protected`, `protected_history` and
+  // `e2ee_only` are additive; stoat-api 0.13.5 predates them.
   Merge<APIChannel | ThreadChannelData | ForumChannelData> & {
     announcement?: boolean;
     spoiler?: boolean;
     protected?: boolean;
+    protected_history?: ChannelProtectedHistory;
     e2ee_only?: boolean;
   },
   HydratedChannel
@@ -108,6 +175,7 @@ export const channelHydration: Hydrate<
     announcement: "announcement",
     spoiler: "spoiler",
     protected: "protected",
+    protected_history: "protectedHistory",
     e2ee_only: "e2eeOnly",
     parent_channel: "parentChannelId",
     origin_message_id: "originMessageId",
@@ -160,6 +228,27 @@ export const channelHydration: Hydrate<
     protected: (channel) =>
       channel.protected === true &&
       (channel.channel_type ?? "TextChannel") === "TextChannel",
+    // Server text channels only, parsed strictly. A full object (it has
+    // its id) that arrives with the wipe already requested or done marks
+    // the channel wiped, so no cached or later row of it is revealed; a
+    // `ChannelUpdate` partial has no id and is handled by the event handler,
+    // which also purges.
+    protectedHistory: (channel, ctx) => {
+      if ((channel.channel_type ?? "TextChannel") !== "TextChannel") {
+        return undefined;
+      }
+
+      const history = parseChannelProtectedHistory(channel.protected_history);
+      if (
+        history &&
+        history.wipe.state !== "none" &&
+        typeof channel._id === "string"
+      ) {
+        (ctx as Client | undefined)?.protectedHistory?.markWiped(channel._id);
+      }
+
+      return history;
+    },
     // Only a literal `true` on a group counts. Objects applied to a channel
     // that is already cached go through `Client.applyE2eeOnlyFlag` instead
     // of this value, so the mark is never lowered.

@@ -124,17 +124,70 @@ type MessageInput = Merge<Message> & {
 /**
  * Whether a wire message is a protected row whose server-controlled text
  * must not be stored (plan D25): it carries `encrypted`, or its channel is
- * protected or pinned on this client.
+ * protected or pinned on this client. The one exception (S4, design 9.5):
+ * a row without `encrypted` that the channel's verified reveal covers
+ * (`Client.revealPreProtectRows`); with no reveal the answer is unchanged.
  * @param message Wire message
  * @param ctx Client
  */
 function isProtectedRow(message: MessageInput, ctx: unknown): boolean {
   if (carriesEncrypted(message)) return true;
   const client = ctx as Client | undefined;
-  return (
-    typeof message.channel === "string" &&
-    client?.isProtectedChannel?.(message.channel) === true
+  if (
+    typeof message.channel !== "string" ||
+    client?.isProtectedChannel?.(message.channel) !== true
+  ) {
+    return false;
+  }
+
+  return !(
+    typeof message._id === "string" &&
+    client.protectedHistory?.covers(message.channel, {
+      id: message._id,
+      encrypted: carriesEncrypted(message),
+    }) === true
   );
+}
+
+/**
+ * Keep a field stripped from a plaintext row of a protected or pinned
+ * channel in the client's in-memory stash, so a later verified reveal can
+ * store it. Never for a row that carries `encrypted`, a row without an id
+ * or a channel (a partial update), or a channel that can take no reveal.
+ * @param message Wire message
+ * @param ctx Client
+ * @param key Hydrated key
+ * @param plain Plain hydration of the field
+ */
+function stashStripped(
+  message: MessageInput,
+  ctx: unknown,
+  key: keyof HydratedMessage,
+  plain: (message: MessageInput, ctx: unknown) => unknown,
+): void {
+  if (carriesEncrypted(message)) return;
+  const client = ctx as Client | undefined;
+  const history = client?.protectedHistory;
+  if (
+    !history ||
+    typeof message._id !== "string" ||
+    typeof message.channel !== "string" ||
+    client.isProtectedChannel?.(message.channel) !== true ||
+    !history.canReveal(message.channel)
+  ) {
+    return;
+  }
+
+  let value: unknown;
+  try {
+    value = plain(message, ctx);
+  } catch {
+    return;
+  }
+
+  if (value !== undefined) {
+    history.stashField(message.channel, message._id, key, value);
+  }
 }
 
 /**
@@ -160,11 +213,19 @@ const STRIPPED_TARGETS = {
   thread_id: "threadId",
 } as const satisfies Record<ProtectedStrippedField, keyof HydratedMessage>;
 
+/**
+ * Hydrated keys a protected row is stored without (`flags` aside, which
+ * only loses its mass-mention bits).
+ */
+export const PROTECTED_STRIPPED_KEYS: readonly (keyof HydratedMessage)[] =
+  PROTECTED_STRIPPED_FIELDS.map((field) => STRIPPED_TARGETS[field]);
+
 type MessageFunctions = Hydrate<MessageInput, HydratedMessage>["functions"];
 
 /**
  * Wrap the hydration of every stripped field so a protected row stores
- * `undefined` there, and clear its mass-mention flag bits.
+ * `undefined` there, and clear its mass-mention flag bits. What is stripped
+ * from a plaintext row is stashed (see {@link stashStripped}).
  * @param functions Plain hydration functions
  */
 function withProtectedStripping(functions: MessageFunctions): MessageFunctions {
@@ -176,16 +237,20 @@ function withProtectedStripping(functions: MessageFunctions): MessageFunctions {
   for (const field of PROTECTED_STRIPPED_FIELDS) {
     const key = STRIPPED_TARGETS[field];
     const plain = out[key];
-    out[key] = (message, ctx) =>
-      isProtectedRow(message, ctx) ? undefined : plain(message, ctx);
+    out[key] = (message, ctx) => {
+      if (!isProtectedRow(message, ctx)) return plain(message, ctx);
+      stashStripped(message, ctx, key, plain);
+      return undefined;
+    };
   }
 
   const flags = out.flags;
   out.flags = (message, ctx) => {
     const value = flags(message, ctx) as number | undefined;
-    return value != null && isProtectedRow(message, ctx)
-      ? stripProtectedFlags(value)
-      : value;
+    if (value == null || !isProtectedRow(message, ctx)) return value;
+    const stripped = stripProtectedFlags(value);
+    if (stripped !== value) stashStripped(message, ctx, "flags", () => value);
+    return stripped;
   };
 
   return out as MessageFunctions;

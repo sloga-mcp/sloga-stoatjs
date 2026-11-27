@@ -20,6 +20,7 @@ export { UserBadges, UserFlags } from "./hydration/user.js";
 export type { HydratedUser } from "./hydration/user.js";
 export * from "./lib/encryptedOnly.js";
 export * from "./lib/mfaMethods.js";
+export * from "./lib/protectedHistory.js";
 export * from "./lib/regex.js";
 export type * from "./lib/watch.js";
 export * from "./permissions/definitions.js";

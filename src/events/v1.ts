@@ -36,10 +36,17 @@ import type { ScheduledMessageData } from "../classes/ScheduledMessage.js";
 import { ServerRole } from "../classes/ServerRole.js";
 import type { ThreadChannelData } from "../classes/Thread.js";
 import { VoiceParticipant } from "../classes/VoiceParticipant.js";
+import { parseChannelProtectedHistory } from "../hydration/channel.js";
 import { UNREAD_COUNT_CAP } from "../hydration/channelUnread.js";
 import type { WatchSessionData } from "../lib/watch.js";
 import { hydrate } from "../hydration/index.js";
-import { carriesEncrypted } from "../lib/protected.js";
+import type { HydratedMessage } from "../hydration/message.js";
+import {
+  PROTECTED_STRIPPED_FIELDS,
+  carriesEncrypted,
+  stripProtectedFlags,
+} from "../lib/protected.js";
+import type { ProtTankSummary } from "../types/prot.js";
 
 import { redactEventForLog } from "./EventClient.js";
 
@@ -531,6 +538,7 @@ type ServerMessage =
     }
   | { type: "DiscordImportFailed"; job_id: string; error: string }
   | { type: "ProtBalanceUpdate"; balance: number; version: number }
+  | { type: "ProtTankUpdate"; channel: string; tank?: ProtTankSummary }
   | {
       /**
        * A user declined a ringing call. Sent privately to the user who
@@ -684,6 +692,137 @@ function isProtectedRowEvent(
 }
 
 /**
+ * The channel a message event that changes an existing row applies to: the
+ * channel the cached row is stored under, never the one the event names. An
+ * event that names another channel than the cached row is refused
+ * (`undefined`): a server must not be able to pick the rules a row is
+ * updated by, or move it, by naming a channel of its choice. With no cached
+ * row, or a partial that has no channel yet, the event's channel is all
+ * there is. Logs ids only.
+ * @param client Client
+ * @param id Message id
+ * @param eventChannel Channel id from the event
+ */
+function eventRowChannel(
+  client: Client,
+  id: string,
+  eventChannel: string,
+): string | undefined {
+  if (!client.messages.has(id)) return eventChannel;
+
+  const cached = client.messages.getUnderlyingObject(id).channelId as
+    | string
+    | undefined;
+  if (cached === undefined) return eventChannel;
+
+  if (cached !== eventChannel) {
+    console.warn("[messages] dropped an event that names another channel", {
+      channelId: cached,
+      messageId: id,
+    });
+    return undefined;
+  }
+
+  return cached;
+}
+
+/**
+ * Take the server-controlled fields off a LIVE plaintext row of a protected
+ * or pinned channel before it is hydrated (S4, R-W4-17). Hydration would
+ * strip them as well, with two exceptions this closes: it keeps the fields
+ * of a row the channel's verified reveal covers, and it stashes what it
+ * strips for a later reveal. A message that is genuinely new cannot carry
+ * an id at or below the boundary, so a live row is never one the reveal is
+ * about: only a fetch stores a revealed row. Rows that carry `encrypted`
+ * are left to hydration, which strips them and never stashes.
+ *
+ * The response to a send (message, poll, sheet, forward, forum post) is a
+ * live row as well and goes through here before it is stored (R-W4-38);
+ * see `Client.stripLiveProtectedRow`.
+ * @param client Client
+ * @param message Wire message from a live event; changed in place
+ */
+export function stripLiveProtectedRow(client: Client, message: Message): void {
+  if (!client.isProtectedChannel(message.channel)) return;
+  if (carriesEncrypted(message)) return;
+
+  const wire = message as unknown as Record<string, unknown>;
+  for (const field of PROTECTED_STRIPPED_FIELDS) delete wire[field];
+
+  if (typeof wire.flags === "number") {
+    wire.flags = stripProtectedFlags(wire.flags);
+  } else if (wire.flags != null) {
+    delete wire.flags;
+  }
+}
+
+/**
+ * Apply a channel object's or partial's `protected_history` (S4, design 9.5
+ * "Wipe purge"). Absent or malformed changes nothing. Otherwise the value
+ * lands on a cached server text channel, and with the wipe `requested` or
+ * `done` the cached plaintext rows of the channel at or below the boundary
+ * are removed, the channel is marked wiped for the session and the removed
+ * rows are announced as `messageDeleteBulk` so open lists drop them.
+ * Encrypted rows are never touched. Ignored for a cached channel of
+ * another type.
+ *
+ * Server input: it can only remove cached text and stop a reveal, never
+ * reveal a row.
+ * @param client Client
+ * @param channelId Channel id
+ * @param raw Wire `protected_history`, if any
+ */
+function applyProtectedHistory(
+  client: Client,
+  channelId: string,
+  raw: unknown,
+): void {
+  if (raw === undefined) return;
+
+  const cached = client.channels.has(channelId)
+    ? client.channels.getUnderlyingObject(channelId)
+    : undefined;
+  if (
+    cached &&
+    cached.channelType !== undefined &&
+    cached.channelType !== "TextChannel"
+  ) {
+    return;
+  }
+
+  const history = parseChannelProtectedHistory(raw);
+  if (!history) return;
+
+  batch(() => {
+    if (cached) {
+      client.channels.updateUnderlyingObject(
+        channelId,
+        "protectedHistory",
+        history,
+      );
+    }
+
+    if (history.wipe.state === "none") return;
+
+    // The purge answers ids; the event carries the rows as they were
+    const rows = new Map<string, HydratedMessage>();
+    for (const id of client.messages.keys()) {
+      const row = client.messages.getUnderlyingObject(id);
+      if (row.channelId === channelId) rows.set(id, row);
+    }
+
+    const removed = client.purgePreProtectRows(channelId, history.boundary);
+    if (removed.length) {
+      client.emit(
+        "messageDeleteBulk",
+        removed.map((id) => rows.get(id)!).filter((row) => row),
+        client.channels.get(channelId),
+      );
+    }
+  });
+}
+
+/**
  * Handle an event for the Client
  * @param client Client
  * @param event Event
@@ -768,6 +907,13 @@ export async function handleEvent(
               channel._id,
               (channel as { e2ee_only?: unknown }).e2ee_only,
             );
+            // Lands on an already-cached channel too: a wipe that happened
+            // while the socket was down purges what is still cached (S4)
+            applyProtectedHistory(
+              client,
+              channel._id,
+              (channel as { protected_history?: unknown }).protected_history,
+            );
             // Ready only ever includes threads the user has JOINED, so seed
             // self-membership — the wire shape carries no membership list.
             if (instance.isThread && client.user) {
@@ -819,6 +965,15 @@ export async function handleEvent(
       // never create or replace a row shown as decrypted, so it is dropped
       // before any hydration, unread count or emit.
       if (isEncryptedRow(client, event._id)) break;
+      // An id cached under another channel is not a row of the channel this
+      // event names: that channel's last message does not move and the
+      // cached row is not handed to the adapter as one of its own
+      if (eventRowChannel(client, event._id, event.channel) === undefined) {
+        break;
+      }
+      // A live plaintext row of a protected channel is never revealed and
+      // never stashed, whatever its id says (S4, R-W4-17)
+      stripLiveProtectedRow(client, event);
       // A protected row is stored without server text (hydration strips
       // it); its server mentions and attachments never touch unread state
       const protectedRow = isProtectedRowEvent(
@@ -924,7 +1079,10 @@ export async function handleEvent(
     }
     case "MessageUpdate": {
       if (isEncryptedRow(client, event.id)) break;
-      if (isProtectedRowEvent(client, event.channel, event.id, event.data)) {
+      // Decided by the channel the row is cached under, not the event's
+      const channelId = eventRowChannel(client, event.id, event.channel);
+      if (channelId === undefined) break;
+      if (isProtectedRowEvent(client, channelId, event.id, event.data)) {
         // Protected row (plan D2): only the pin state is server-controlled.
         // No edit stamp, no content, no other field.
         const message = client.messages.getOrPartial(event.id);
@@ -937,7 +1095,7 @@ export async function handleEvent(
 
         const previousMessage = {
           ...client.messages.getUnderlyingObject(event.id),
-          channelId: event.channel,
+          channelId,
         };
         client.messages.updateUnderlyingObject(event.id, "pinned", pinned);
         client.emit("messageUpdate", message, previousMessage);
@@ -947,13 +1105,14 @@ export async function handleEvent(
       if (message) {
         const previousMessage = {
           ...client.messages.getUnderlyingObject(event.id),
-          channelId: event.channel,
+          channelId,
         };
 
         client.messages.updateUnderlyingObject(event.id, {
+          // `channel` last: the update data never moves the row
           ...hydrate(
             "message",
-            { ...event.data, channel: event.channel },
+            { ...event.data, channel: channelId },
             client,
             false,
           ),
@@ -980,13 +1139,16 @@ export async function handleEvent(
     }
     case "MessageAppend": {
       if (isEncryptedRow(client, event.id)) break;
+      // Decided by the channel the row is cached under, not the event's
+      const channelId = eventRowChannel(client, event.id, event.channel);
+      if (channelId === undefined) break;
       // Server embeds never land on a protected row (plan D2)
-      if (isProtectedRowEvent(client, event.channel, event.id)) break;
+      if (isProtectedRowEvent(client, channelId, event.id)) break;
       const message = client.messages.getOrPartial(event.id);
       if (message) {
         const previousMessage = {
           ...client.messages.getUnderlyingObject(event.id),
-          channelId: event.channel,
+          channelId,
         };
 
         client.messages.updateUnderlyingObject(event.id, "embeds", (embeds) => [
@@ -996,11 +1158,14 @@ export async function handleEvent(
           ) ?? []),
         ]);
 
-        client.messages.updateUnderlyingObject(
-          event.id,
-          "channelId",
-          event.channel,
-        );
+        // Only a partial that had no channel takes one; a row never moves
+        if (client.messages.getUnderlyingObject(event.id).channelId == null) {
+          client.messages.updateUnderlyingObject(
+            event.id,
+            "channelId",
+            channelId,
+          );
+        }
 
         client.emit("messageUpdate", message, previousMessage);
       }
@@ -1121,6 +1286,11 @@ export async function handleEvent(
         event._id,
         (event as { e2ee_only?: unknown }).e2ee_only,
       );
+      applyProtectedHistory(
+        client,
+        event._id,
+        (event as { protected_history?: unknown }).protected_history,
+      );
       break;
     }
     case "ChannelUpdate": {
@@ -1136,6 +1306,10 @@ export async function handleEvent(
         delete (changes as Partial<typeof changes>).protected;
         // `e2eeOnly` is one-way too: see applyE2eeOnlyFlag below
         delete (changes as Partial<typeof changes>).e2eeOnly;
+        // `protectedHistory` lands through applyProtectedHistory below, so
+        // a malformed value never erases the one held (it is never in
+        // `clear`)
+        delete (changes as Partial<typeof changes>).protectedHistory;
 
         if (event.clear) {
           for (const remove of event.clear) {
@@ -1171,6 +1345,13 @@ export async function handleEvent(
           event.id,
           (event.data as { e2ee_only?: unknown }).e2ee_only,
         );
+        // After the flag, so a protect that carries a wipe strips, then
+        // purges (S4, design 9.5 "Wipe purge")
+        applyProtectedHistory(
+          client,
+          event.id,
+          (event.data as { protected_history?: unknown }).protected_history,
+        );
         client.emit("channelUpdate", channel, previousChannel);
       } else {
         // Not cached: still pin a channel the server reports protected
@@ -1178,6 +1359,12 @@ export async function handleEvent(
           event.id,
           (event.data as { protected?: unknown }).protected,
           false,
+        );
+        // And still purge its cached rows on a wipe
+        applyProtectedHistory(
+          client,
+          event.id,
+          (event.data as { protected_history?: unknown }).protected_history,
         );
       }
       break;
@@ -1327,6 +1514,11 @@ export async function handleEvent(
             channel._id,
             (channel as { protected?: unknown }).protected,
             true,
+          );
+          applyProtectedHistory(
+            client,
+            channel._id,
+            (channel as { protected_history?: unknown }).protected_history,
           );
         }
       });
@@ -1914,6 +2106,8 @@ export async function handleEvent(
       // As with Message: a trusted id never arrives this way, so it must not
       // create a row that would be shown as decrypted.
       if (isEncryptedRow(client, message._id)) break;
+      // Live as well: never revealed, never stashed (S4, R-W4-17)
+      stripLiveProtectedRow(client, message);
       if (!client.messages.has(message._id)) {
         const instance = batch(() => {
           if (message.member) {
@@ -2248,6 +2442,16 @@ export async function handleEvent(
       if (event.version <= client.protBalanceVersion) break;
       client.protBalanceVersion = event.version;
       client.emit("protBalanceUpdate", event.balance, event.version);
+      break;
+    }
+    case "ProtTankUpdate": {
+      // Same rule as REST reads: an older (version, balance_version) of the
+      // stored tank is dropped; an absent tank removes the entry
+      client.setProtTank(event.channel, event.tank);
+      if (event.tank && client.protTanks.get(event.channel) !== event.tank) {
+        break;
+      }
+      client.emit("protTankUpdate", event.channel, event.tank);
       break;
     }
     case "CalendarEventRsvp": {
